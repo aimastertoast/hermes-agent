@@ -23,7 +23,7 @@ import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connec
 import { reconnectGateway } from '@/store/gateway-reconnect'
 import { dismissNotification, notify } from '@/store/notifications'
 import { $connection } from '@/store/session'
-import type { BackendUpdateCheckResponse } from '@/types/hermes'
+import type { BackendUpdateCheckResponse, UpdateReceipt } from '@/types/hermes'
 
 /** Keyed per retired-channel revision: a new retirement (or a revision bump on
  *  the same channel) re-shows the notice, a plain re-check never does. */
@@ -65,24 +65,6 @@ export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
 // recent durable update receipt. The orchestrator is the source of truth for
 // what runs; these atoms only feed it user preference on each invoke and keep
 // the receipt visible in the overlay so the user can acknowledge it once.
-
-/** Durable update receipt (one `hermes update` run). The shape mirrors
- *  ``hermes_cli.update_receipt.UpdateReceiptRecord`` — kept minimal here so
- *  task 9 can wire settings atoms without dragging in the full pipeline
- *  model; a later task will tighten the type. Optional fields stay optional
- *  because older backends (or older receipts on disk) may not populate them
- *  all, and a missing optional field must not break a renderer that only
- *  cares about ``outcome`` and ``receipt_id``. */
-export interface UpdateReceipt {
-  receipt_id: string
-  outcome: 'success' | 'failed' | 'conflict' | 'aborted' | 'partial' | 'catastrophic' | 'no-op'
-  error?: string
-  rolled_back?: boolean
-  acknowledged?: boolean
-  steps?: ReadonlyArray<{ name: string; ok: boolean; detail?: unknown; warning?: string }>
-  pre_state?: Record<string, unknown>
-  post_state?: Record<string, unknown>
-}
 
 /** When true, the orchestrator's auto-classifier may run `hermes update`
  *  unattended for changes it can prove safe (no user code touched). Default
