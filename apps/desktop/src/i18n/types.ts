@@ -3583,6 +3583,11 @@ export interface Translations {
     updateConflict: string
     updateConflictResolve: string
     updateFailed: string
+    /** Receipt-driven overlay actions (Task 13). The Acknowledge button
+     *  flips `$lastReceiptAcknowledged` and POSTs `/receipt/:id/ack`;
+     *  View receipt deep-links into the orchestrator's logged receipt. */
+    acknowledge: string
+    viewReceipt: string
   }
 
   /** The guided first run's pre-written opening line — banked, not generated,

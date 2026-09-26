@@ -4678,7 +4678,10 @@ export const deOverrides = {
     updateConflict: 'Update conflict in: {files}',
     updateConflictResolve:
       'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
-    updateFailed: 'Update {outcome}: {error}'
+    updateFailed: 'Update {outcome}: {error}',
+    // Receipt-driven overlay actions (Task 13) — pending translator review.
+    acknowledge: 'Acknowledge',
+    viewReceipt: 'View receipt'
   },
   handoffTour: {
     profileTitle: 'Ihre erste Aufgabe läuft im Standardprofil',
