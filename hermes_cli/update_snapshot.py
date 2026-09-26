@@ -18,6 +18,11 @@ class UpdateSnapshot:
     schema_version_field: str = "schema_version"
     config_yaml_bytes: bytes = b""
     state_db_bytes: bytes = b""
+    # How many local commits are ahead of origin/<channel> when this snapshot
+    # was captured. Used by the orchestrator (Task 6) via classify_safe's
+    # _StateLike protocol. Default 0 so callers that don't care (e.g. the
+    # round-trip snapshot tests) don't need to pass it.
+    local_commits_ahead: int = 0
 
 
 def capture_pre_state(home: Path, repo: Path | None) -> UpdateSnapshot:

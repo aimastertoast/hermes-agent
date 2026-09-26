@@ -765,6 +765,12 @@ class UpdateReceiptRecord:
     ahead_disregarded: int = 0
     pre_state: dict = field(default_factory=dict)
     post_state: dict = field(default_factory=dict)
+    # ``backup_branch`` ref (e.g. ``backup-1700000000``) when the merge step
+    # actually created a backup; empty when the backup was skipped because
+    # local was at origin. The orchestrator (Task 6) writes this so the
+    # dashboard / receipt reader can locate the rollback branch without
+    # re-scanning the git tree.
+    backup_ref: str = ""
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
 
