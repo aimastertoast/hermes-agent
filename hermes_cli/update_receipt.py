@@ -33,13 +33,15 @@ import copy
 import json
 import logging
 import os
+import secrets
 import sys
 import time
 import uuid
 from contextlib import contextmanager, suppress
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -715,3 +717,154 @@ def print_fleet_version_matrix(fleet: list[dict[str, Any]]) -> bool:
         print("  Run `hermes gateway restart` (or `hermes -p <profile> gateway restart` for a named")
         print("  profile), then `hermes gateway status` to confirm.")
     return stale_or_down > 0
+
+
+# ---------------------------------------------------------------------------
+# Pipeline receipt contract (Task 3 of the update-permanent-fix plan)
+#
+# Distinct from the legacy ``UpdateReceipt`` class above: this is a typed,
+# dataclass-based record the orchestrator (Task 6) and the dashboard/
+# acknowledgement flows use to communicate the outcome of one update run.
+# Lives at ``<home>/update_receipts/<receipt_id>.json`` (NOT ``logs/`` —
+# profile-scoped, not log-scoped, so an update can never read receipts
+# from a sibling profile or refuse to write because the log dir is full).
+#
+# Naming note: ``UpdateReceipt`` is the legacy class above; this dataclass
+# is ``UpdateReceiptRecord`` to avoid breaking the dozens of imports that
+# already bind the legacy name. Likewise ``read_latest_receipt()`` stays
+# signature-free for backwards compatibility — the new home-aware readers
+# live under the ``_pipeline`` suffix.
+# ---------------------------------------------------------------------------
+
+
+_PIPELINE_RECEIPT_DIRNAME = "update_receipts"
+
+
+@dataclass
+class UpdateReceiptRecord:
+    """Durable, typed record of one ``hermes update`` run.
+
+    The fields here are the contract every later task in the plan depends
+    on (orchestrator, classifier, dashboard, acknowledgement). The dataclass
+    form (vs the legacy ``UpdateReceipt.data`` dict) is deliberate: callers
+    can introspect fields, IDEs can autocomplete them, and JSON round-trip
+    is ``UpdateReceiptRecord(**json.loads(...))``.
+    """
+
+    receipt_id: str
+    outcome: Literal["success", "failed", "conflict", "aborted", "partial", "catastrophic"]
+    error: Optional[str]
+    rolled_back: bool
+    acknowledged: bool = False
+    strategy: str = "merge"
+    applied_via: str = "user-click"
+    safe_classification: dict = field(
+        default_factory=lambda: {"auto_apply_safe": False, "reasons": []}
+    )
+    steps: list = field(default_factory=list)
+    ahead_disregarded: int = 0
+    pre_state: dict = field(default_factory=dict)
+    post_state: dict = field(default_factory=dict)
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+
+    @classmethod
+    def new(cls, outcome, error, rolled_back, **kwargs) -> "UpdateReceiptRecord":
+        """Construct a fresh record with a random 16-hex receipt id."""
+        return cls(
+            receipt_id=secrets.token_hex(8),
+            outcome=outcome,
+            error=error,
+            rolled_back=rolled_back,
+            **kwargs,
+        )
+
+
+def _pipeline_receipt_dir(home: Path) -> Path:
+    """Return (and create) ``<home>/update_receipts/``."""
+    d = home / _PIPELINE_RECEIPT_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def write_pipeline_receipt(home: Path, record: UpdateReceiptRecord) -> Path:
+    """Atomically write ``<home>/update_receipts/<id>.json`` + the ``latest.json`` pointer.
+
+    Atomicity is non-negotiable: a power loss mid-write must never leave a
+    torn receipt that looks complete to the next read. We write the full
+    payload to ``.<id>.json.tmp`` first (same directory, so the rename is
+    a single atomic inode swap on every supported FS), then ``rename`` it
+    over the target, then overwrite the pointer. The pointer write is also
+    a temp+rename so a concurrent reader never sees ``latest.json`` pointing
+    at a receipt id whose file doesn't exist yet.
+    """
+    rdir = _pipeline_receipt_dir(home)
+    target = rdir / f"{record.receipt_id}.json"
+    tmp = rdir / f".{record.receipt_id}.json.tmp"
+    payload = json.dumps(asdict(record), indent=2, default=str)
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(target)
+    pointer_tmp = rdir / ".latest.json.tmp"
+    pointer_tmp.write_text(
+        json.dumps({"receipt_id": record.receipt_id}), encoding="utf-8"
+    )
+    pointer_tmp.replace(rdir / "latest.json")
+    return target
+
+
+def read_latest_pipeline_receipt(
+    home: Path,
+) -> Optional[UpdateReceiptRecord]:
+    """Follow the ``latest.json`` pointer and reconstruct the record. ``None`` if absent/torn.
+
+    Returns ``None`` (does not raise) on any of: missing pointer, missing
+    target file, malformed JSON, schema mismatch (extra/missing fields).
+    Callers should treat ``None`` as "no acknowledged-up-to-date receipt
+    exists" — the legacy ``read_latest_receipt()`` above has the same
+    never-raise contract for its callers.
+    """
+    rdir = _pipeline_receipt_dir(home)
+    pointer = rdir / "latest.json"
+    if not pointer.exists():
+        return None
+    try:
+        data = json.loads(pointer.read_text(encoding="utf-8"))
+        receipt_id = data["receipt_id"]
+    except (json.JSONDecodeError, KeyError, OSError):
+        return None
+    target = rdir / f"{receipt_id}.json"
+    if not target.exists():
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        return UpdateReceiptRecord(**payload)
+    except (json.JSONDecodeError, TypeError, OSError):
+        return None
+
+
+def acknowledge_pipeline_receipt(home: Path, receipt_id: str) -> bool:
+    """Flip ``acknowledged=True`` on the on-disk receipt. Idempotent.
+
+    Returns ``True`` iff the receipt existed and was (re)written. Idempotent:
+    calling twice on the same id leaves the file byte-identical after the
+    first call (acknowledged was already ``True``). Never raises.
+
+    Note: this rewrites the whole receipt file rather than mutating it in
+    place. The same atomic write contract as ``write_pipeline_receipt``
+    applies — a power loss mid-acknowledge leaves either the previous
+    acknowledged=False state or the new acknowledged=True state, never a
+    torn file.
+    """
+    rdir = _pipeline_receipt_dir(home)
+    target = rdir / f"{receipt_id}.json"
+    if not target.exists():
+        return False
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        data["acknowledged"] = True
+    except (json.JSONDecodeError, OSError):
+        return False
+    tmp = rdir / f".{receipt_id}.json.tmp"
+    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp.replace(target)
+    return True
