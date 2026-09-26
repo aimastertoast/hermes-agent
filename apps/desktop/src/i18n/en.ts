@@ -1354,7 +1354,16 @@ export const en: Translations = {
       driverHealth: 'Driver health'
     },
     about: {
-      updates: 'Updates'
+      updates: 'Updates',
+      updateModes: {
+        title: 'Update behavior',
+        safeModeAutoLabel: 'Auto-apply safe updates',
+        safeModeAutoDescription:
+          'When enabled, updates that don’t change your schema, config, or MCP servers are applied automatically.',
+        forceModeLocalLabel: 'Allow Update Now when local is ahead',
+        forceModeLocalDescription:
+          'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
+      }
     },
     config: {
       minimizeToTrayTitle: 'Minimize to tray',

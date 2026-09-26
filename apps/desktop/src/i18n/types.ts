@@ -1133,6 +1133,15 @@ export interface Translations {
     }
     about: {
       updates: string
+      /** Renderer-side toggles for the orchestrator's update modes (task 9
+       *  atoms: $updateSafeModeAuto, $updateForceModeLocal). */
+      updateModes: {
+        title: string
+        safeModeAutoLabel: string
+        safeModeAutoDescription: string
+        forceModeLocalLabel: string
+        forceModeLocalDescription: string
+      }
     }
     config: {
       minimizeToTrayTitle: string
