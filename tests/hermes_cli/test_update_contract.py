@@ -10,16 +10,69 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from hermes_cli.image_provenance import read_image_provenance
 from hermes_cli.update_contract import (
+    LOCAL_AHEAD_REFUSAL,
+    FORCE_PUSHED_REFUSAL,
+    LAST_ORIGIN_SHA_PATH,
     UpdateRefusal,
     evaluate_update_admission,
+    evaluate_update_force_requirement,
     record_refusal_receipt,
 )
+
+
+# ---------------------------------------------------------------------------
+# Hermetic git-repo helper (Task 8 force-requirement tests).
+#
+# Mirrors the `hermetic_git_repo` fixture in hermes_cli/tests/update/conftest.py
+# but as a plain function: pytest's modern fixture-call-directly checks block
+# importing fixtures across directories. The behavior is identical: bare
+# remote at <tmp>/remote.git, clone at <tmp>/repo, three commits on `main`.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _GitRepo:
+    repo: Path
+    remote: Path
+
+
+def _make_hermetic_git_repo(tmp_path: Path) -> _GitRepo:
+    repo_path = tmp_path / "repo"
+    remote_path = tmp_path / "remote.git"
+    subprocess.check_call(["git", "init", "--bare", str(remote_path)])
+    subprocess.check_call(
+        ["git", "-C", str(remote_path), "symbolic-ref", "HEAD", "refs/heads/main"]
+    )
+    subprocess.check_call(["git", "clone", str(remote_path), str(repo_path)])
+    subprocess.check_call(
+        ["git", "-C", str(repo_path), "config", "user.email", "test@fake.local"]
+    )
+    subprocess.check_call(
+        ["git", "-C", str(repo_path), "config", "user.name", "Test User"]
+    )
+    for msg in ("initial", "second", "third"):
+        (repo_path / f"file-{msg}.txt").write_text(msg)
+        subprocess.check_call(["git", "-C", str(repo_path), "add", "."])
+        subprocess.check_call(["git", "-C", str(repo_path), "commit", "-m", msg])
+        subprocess.check_call(["git", "-C", str(repo_path), "push", "origin", "main"])
+    return _GitRepo(repo=repo_path, remote=remote_path)
+
+
+def _isolated_hermes_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point HERMES_HOME at a tmp_path-anchored fake home so the SHA cache file
+    never touches the user's live install."""
+    home = tmp_path / "fake-home"
+    (home / "update").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    return home
 
 
 def _valid_marker(tmp_path: Path) -> Path:
@@ -251,3 +304,139 @@ def test_admission_apt_termux_command_comes_from_steward_table(tmp_path, monkeyp
     assert refusal is not None
     assert refusal.code == "apt-termux"
     assert refusal.update_command == "pkg upgrade hermes-agent --from-table"
+
+
+# ---------------------------------------------------------------------------
+# Force-requirement gate (Task 8 — local-ahead / force-pushed)
+# ---------------------------------------------------------------------------
+#
+# These exercise ``evaluate_update_force_requirement``, which is intentionally
+# separate from ``evaluate_update_admission`` (the install-method gate). The
+# admission gate says "this install must not update in place" (Docker, Nix,
+# apt, commit-build, sealed stewards); the force-requirement gate says "an
+# update COULD proceed, but only with explicit user confirmation". Both
+# refuse-shaped outcomes use the same ``UpdateRefusal`` dataclass so callers
+# can branch on ``refusal.code``.
+
+
+def test_force_requirement_local_ahead_triggers_refusal(tmp_path, monkeypatch):
+    """A local commit on top of an in-sync origin triggers LOCAL_AHEAD_REFUSAL.
+
+    The local commit has not been pushed, so ``rev-list origin/main..HEAD``
+    counts >= 1 and the gate fires. The message must reference the Settings
+    toggle (Task 12 wires the actual toggle; Task 8 only requires the message
+    to mention it)."""
+    _isolated_hermes_home(tmp_path, monkeypatch)
+    git_repo = _make_hermetic_git_repo(tmp_path)
+    repo = git_repo.repo
+
+    # First call seeds the SHA cache and confirms the clean state.
+    assert evaluate_update_force_requirement(repo) is None
+
+    (repo / "local.txt").write_text("local-only")
+    subprocess.check_call(["git", "-C", str(repo), "add", "."])
+    subprocess.check_call(["git", "-C", str(repo), "commit", "-m", "local-only"])
+
+    refusal = evaluate_update_force_requirement(repo)
+    assert refusal is not None
+    assert refusal.code == "local-ahead"
+    assert refusal is LOCAL_AHEAD_REFUSAL
+    assert "Settings" in refusal.message
+    assert "Allow Update Now when local is ahead" in refusal.message
+
+
+def test_force_requirement_no_local_ahead_returns_none(tmp_path, monkeypatch):
+    """A clean repo (HEAD == origin/main, cache fresh) returns None."""
+    _isolated_hermes_home(tmp_path, monkeypatch)
+    git_repo = _make_hermetic_git_repo(tmp_path)
+    refusal = evaluate_update_force_requirement(git_repo.repo)
+    assert refusal is None
+
+    # Second call also returns None (cache hit, no change).
+    refusal = evaluate_update_force_requirement(git_repo.repo)
+    assert refusal is None
+
+
+def test_force_requirement_no_origin_returns_none(tmp_path, monkeypatch):
+    """A repo with no ``origin`` remote cannot be compared against upstream
+    and the gate must skip the check rather than refuse on infrastructure
+    uncertainty."""
+    _isolated_hermes_home(tmp_path, monkeypatch)
+    git_repo = _make_hermetic_git_repo(tmp_path)
+    repo = git_repo.repo
+    subprocess.check_call(["git", "-C", str(repo), "remote", "remove", "origin"])
+
+    # Even with a local-only commit, the missing origin means we skip the
+    # check entirely rather than refuse.
+    (repo / "local.txt").write_text("local-only")
+    subprocess.check_call(["git", "-C", str(repo), "add", "."])
+    subprocess.check_call(["git", "-C", str(repo), "commit", "-m", "local-only"])
+
+    assert evaluate_update_force_requirement(repo) is None
+
+
+def test_force_requirement_force_pushed_detection_via_stale_origin_sha(
+    tmp_path, monkeypatch
+):
+    """A force-push that orphans local HEAD (the upstream history was rewritten
+    so HEAD is no longer reachable from the new origin tip) triggers
+    FORCE_PUSHED_REFUSAL even when ``rev-list origin/main..HEAD`` would also
+    be non-zero. The force-pushed code takes precedence because a history
+    rewrite is the more dangerous condition.
+
+    Setup: rewrite origin's HEAD via ``commit --amend`` + ``push --force``
+    from a sibling clone, then ``fetch`` in the original repo so its
+    ``origin/main`` ref reflects the rewrite. The cache is pre-populated with
+    the SHA we recorded BEFORE the rewrite so the SHA-comparison arm fires.
+    """
+    home = _isolated_hermes_home(tmp_path, monkeypatch)
+    git_repo = _make_hermetic_git_repo(tmp_path)
+    repo = git_repo.repo
+
+    # First seed the cache with the *current* SHA so the next rewrite is
+    # detected as a change rather than a first-run no-op.
+    seeded = evaluate_update_force_requirement(repo)
+    assert seeded is None
+    cache_file = home / "update" / "last_origin_sha"
+    assert cache_file.exists()
+    pre_rewrite_sha = cache_file.read_text().strip()
+
+    # Force-push from a sibling clone: amend the latest commit then push --force.
+    rewriter = tmp_path / "rewriter"
+    subprocess.check_call(["git", "clone", str(git_repo.remote), str(rewriter)])
+    subprocess.check_call(
+        ["git", "-C", str(rewriter), "config", "user.email", "test@fake.local"]
+    )
+    subprocess.check_call(
+        ["git", "-C", str(rewriter), "config", "user.name", "Test User"]
+    )
+    (rewriter / "file-third.txt").write_text("amended-content")
+    subprocess.check_call(["git", "-C", str(rewriter), "add", "."])
+    subprocess.check_call(
+        ["git", "-C", str(rewriter), "commit", "--amend", "--no-edit"]
+    )
+    subprocess.check_call(
+        ["git", "-C", str(rewriter), "push", "--force", "origin", "main"]
+    )
+    subprocess.check_call(["git", "-C", str(repo), "fetch", "origin"])
+
+    # Sanity: confirm we actually rewrote history (origin SHA now differs
+    # from what we recorded). This guards against the test silently passing
+    # because the amend/fetch sequence didn't actually change anything.
+    new_origin_sha = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "origin/main"], text=True
+    ).strip()
+    assert new_origin_sha != pre_rewrite_sha, "force-push setup did not rewrite origin"
+
+    refusal = evaluate_update_force_requirement(repo)
+    assert refusal is not None
+    assert refusal.code == "force-pushed"
+    assert refusal is FORCE_PUSHED_REFUSAL
+    assert "force-push" in refusal.message.lower()
+
+
+def test_force_requirement_last_origin_sha_path_default():
+    """Sanity: the module-level default points under ``~/.hermes/update``."""
+    assert str(LAST_ORIGIN_SHA_PATH).endswith(
+        os.path.join(".hermes", "update", "last_origin_sha")
+    )
