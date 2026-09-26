@@ -17,6 +17,7 @@ import type {
 } from '@/global'
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { Codecs, persistentAtom } from '@/lib/persisted'
 import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
 import { reconnectGateway } from '@/store/gateway-reconnect'
@@ -57,6 +58,57 @@ export const $updateApply = atom<UpdateApplyState>(IDLE)
 export const $updateChecking = atom<boolean>(false)
 export const $updateOverlayOpen = atom<boolean>(false)
 export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
+
+// ── Update-settings atoms (task 9) ───────────────────────────────────────────
+//
+// Renderer-side toggles for the orchestrator's user-facing modes and the most
+// recent durable update receipt. The orchestrator is the source of truth for
+// what runs; these atoms only feed it user preference on each invoke and keep
+// the receipt visible in the overlay so the user can acknowledge it once.
+
+/** Durable update receipt (one `hermes update` run). The shape mirrors
+ *  ``hermes_cli.update_receipt.UpdateReceiptRecord`` — kept minimal here so
+ *  task 9 can wire settings atoms without dragging in the full pipeline
+ *  model; a later task will tighten the type. Optional fields stay optional
+ *  because older backends (or older receipts on disk) may not populate them
+ *  all, and a missing optional field must not break a renderer that only
+ *  cares about ``outcome`` and ``receipt_id``. */
+export interface UpdateReceipt {
+  receipt_id: string
+  outcome: 'success' | 'failed' | 'conflict' | 'aborted' | 'partial' | 'catastrophic' | 'no-op'
+  error?: string
+  rolled_back?: boolean
+  acknowledged?: boolean
+  steps?: ReadonlyArray<{ name: string; ok: boolean; detail?: unknown; warning?: string }>
+  pre_state?: Record<string, unknown>
+  post_state?: Record<string, unknown>
+}
+
+/** When true, the orchestrator's auto-classifier may run `hermes update`
+ *  unattended for changes it can prove safe (no user code touched). Default
+ *  off: the user must opt in once. Persisted — the orchestrator reads it on
+ *  every invoke. */
+export const $updateSafeModeAuto = persistentAtom<boolean>('hermes.update.safeModeAuto', false, Codecs.bool)
+
+/** When true, force the apply to target the LOCAL checkout (the machine
+ *  running the GUI) instead of the active remote backend. Useful when the
+ *  remote registry misroutes an apply at the wrong machine. Default off. */
+export const $updateForceModeLocal = persistentAtom<boolean>('hermes.update.forceModeLocal', false, Codecs.bool)
+
+/** The most recent durable receipt the renderer has loaded. Null when none
+ *  exists yet or after the user acknowledges it. NOT persisted — the
+ *  authoritative copy lives on disk under ``<home>/update_receipts/``; a
+ *  later task will hydrate this atom from main on startup and after each
+ *  apply finishes. */
+export const $lastReceipt = atom<UpdateReceipt | null>(null)
+
+/** Whether the user has acknowledged the most recent receipt. Default true
+ *  so a fresh install does not re-show an old receipt on first paint. The
+ *  apply flow flips it back to false when a new receipt lands; the overlay's
+ *  "Acknowledge" action flips it back to true. Persisted so the choice
+ *  survives relaunches (re-rendering the receipt on every boot would be
+ *  punishing for users who already closed it once). */
+export const $lastReceiptAcknowledged = persistentAtom<boolean>('hermes.update.lastReceiptAck', true, Codecs.bool)
 
 // Client and backend are independently updatable; each keeps its own state.
 export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)

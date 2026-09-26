@@ -34,6 +34,17 @@ vi.mock('@/lib/storage', () => ({
       storage.set(key, JSON.stringify(value))
     }
   },
+  // persistentAtom (used by the settings atoms added in task 9) funnels every
+  // read/write through readKey/writeKey — give it the same Map-backed shim so
+  // tests can observe the persistence path directly.
+  readKey: (key: string) => storage.get(key) ?? null,
+  writeKey: (key: string, value: null | string) => {
+    if (value === null) {
+      storage.delete(key)
+    } else {
+      storage.set(key, value)
+    }
+  },
   storedBoolean: (key: string, fallback: boolean) => {
     const value = storage.get(key)
 
@@ -106,6 +117,10 @@ const {
   startUpdatePoller,
   stopUpdatePoller,
   $updateStatus,
+  $updateSafeModeAuto,
+  $updateForceModeLocal,
+  $lastReceipt,
+  $lastReceiptAcknowledged,
   BACKGROUND_UPDATE_CHECK_MS
 } = await import('./updates')
 
@@ -1790,5 +1805,70 @@ describe('discontinued retirement notice', () => {
     await checkUpdates({ force: true })
 
     expect(notifySpy.mock.calls.filter(call => call[0]?.id === 'desktop-build-discontinued')).toHaveLength(0)
+  })
+})
+
+// Task 9 — settings atoms for the orchestrator's user-facing modes and the
+// last-receipt acknowledgement. Each persistentAtom is created at module
+// load and seeds from the mock storage, so default-value tests rely on the
+// `beforeEach` clearing storage BEFORE the test (true on first load) AND
+// each test resetting the atoms so a previous set() does not leak through
+// the persistent in-memory value.
+describe('updates settings atoms', () => {
+  beforeEach(() => {
+    storage.clear()
+    // persistentAtom does NOT write its creation-time value back, so a clear
+    // here would naturally make the atoms fall back to their default on the
+    // NEXT set(). But the in-memory value persists across clears — reset
+    // each atom explicitly so a previous test's set() can't poison the
+    // default-value assertions below.
+    $updateSafeModeAuto.set(false)
+    $updateForceModeLocal.set(false)
+    $lastReceipt.set(null)
+    $lastReceiptAcknowledged.set(true)
+  })
+
+  it('$updateSafeModeAuto defaults to false', () => {
+    expect($updateSafeModeAuto.get()).toBe(false)
+  })
+
+  it('$updateForceModeLocal defaults to false', () => {
+    expect($updateForceModeLocal.get()).toBe(false)
+  })
+
+  it('$lastReceipt defaults to null', () => {
+    expect($lastReceipt.get()).toBeNull()
+  })
+
+  it('$lastReceiptAcknowledged defaults to true', () => {
+    expect($lastReceiptAcknowledged.get()).toBe(true)
+  })
+
+  it('setting $updateSafeModeAuto persists', () => {
+    $updateSafeModeAuto.set(true)
+    expect($updateSafeModeAuto.get()).toBe(true)
+    // The change must be readable back via the persistent storage the atom
+    // writes through, not just the in-memory snapshot — a reload that does
+    // not persist the toggle would silently re-disable it on every boot.
+    expect(storage.get('hermes.update.safeModeAuto')).toBe('true')
+  })
+
+  it('setting $updateForceModeLocal persists', () => {
+    $updateForceModeLocal.set(true)
+    expect($updateForceModeLocal.get()).toBe(true)
+    expect(storage.get('hermes.update.forceModeLocal')).toBe('true')
+  })
+
+  it('flipping $updateSafeModeAuto back to false persists the cleared state', () => {
+    $updateSafeModeAuto.set(true)
+    $updateSafeModeAuto.set(false)
+    expect($updateSafeModeAuto.get()).toBe(false)
+    expect(storage.get('hermes.update.safeModeAuto')).toBe('false')
+  })
+
+  it('flipping $lastReceiptAcknowledged back to false persists', () => {
+    $lastReceiptAcknowledged.set(false)
+    expect($lastReceiptAcknowledged.get()).toBe(false)
+    expect(storage.get('hermes.update.lastReceiptAck')).toBe('false')
   })
 })
