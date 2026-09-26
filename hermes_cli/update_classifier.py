@@ -4,7 +4,6 @@ No I/O, no time, no globals — see spec Section 2.1.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Protocol
 
 

@@ -54,3 +54,17 @@ def test_classify_safe_marks_any_schema_change_unsafe(schema):
     pre = FakeState(state_db_schema=schema)
     post = FakeState(state_db_schema=schema + 1)
     assert classify_safe(pre, post, origin_moved=False, local_ahead=False) is False
+
+
+def test_classify_safe_marks_removed_mcp_server_unsafe():
+    """A pre-state server that no longer exists post-update = unsafe."""
+    pre = FakeState(mcp_servers={"github": {"enabled": True}, "slack": {"enabled": True}})
+    post = FakeState(mcp_servers={"github": {"enabled": True}})
+    assert classify_safe(pre, post, origin_moved=False, local_ahead=False) is False
+
+
+def test_classify_safe_marks_changed_mcp_server_unsafe():
+    """A pre-state server whose config changed post-update = unsafe."""
+    pre = FakeState(mcp_servers={"github": {"enabled": True, "token": "x"}})
+    post = FakeState(mcp_servers={"github": {"enabled": True, "token": "y"}})
+    assert classify_safe(pre, post, origin_moved=False, local_ahead=False) is False
