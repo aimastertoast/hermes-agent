@@ -99,3 +99,49 @@ def test_write_pipeline_receipt_is_atomic(isolated_hermes_home):
     # No leftover tmp files.
     tmp_files = list((home / "update_receipts").glob(".*.tmp"))
     assert tmp_files == []
+
+
+def test_read_latest_pipeline_receipt_returns_none_when_pointer_missing_target(
+    isolated_hermes_home,
+):
+    """latest.json points to a receipt file that doesn't exist."""
+    home = isolated_hermes_home
+    rdir = home / "update_receipts"
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "latest.json").write_text(json.dumps({"receipt_id": "ghost"}))
+    assert read_latest_pipeline_receipt(home) is None
+
+
+def test_read_latest_pipeline_receipt_returns_none_when_latest_json_corrupt(
+    isolated_hermes_home,
+):
+    """Malformed latest.json — must NOT raise."""
+    home = isolated_hermes_home
+    rdir = home / "update_receipts"
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "latest.json").write_text("{this is not json")
+    assert read_latest_pipeline_receipt(home) is None
+
+
+def test_read_latest_pipeline_receipt_returns_none_when_receipt_file_corrupt(
+    isolated_hermes_home,
+):
+    """Valid pointer but the receipt file itself is malformed."""
+    home = isolated_hermes_home
+    rdir = home / "update_receipts"
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "latest.json").write_text(json.dumps({"receipt_id": "bad"}))
+    (rdir / "bad.json").write_text("{also not json")
+    assert read_latest_pipeline_receipt(home) is None
+
+
+def test_acknowledge_pipeline_receipt_returns_false_when_missing(
+    isolated_hermes_home,
+):
+    """acknowledge_pipeline_receipt on a non-existent receipt id is a no-op."""
+    home = isolated_hermes_home
+    rdir = home / "update_receipts"
+    rdir.mkdir(parents=True, exist_ok=True)
+    assert acknowledge_pipeline_receipt(home, "never-existed") is False
+    # No file was created.
+    assert not (rdir / "never-existed.json").exists()
