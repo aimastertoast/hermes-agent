@@ -4662,7 +4662,14 @@ export const deOverrides = {
       failed: 'Backend-Update fehlgeschlagen.',
       noReturn:
         'Das Backend kam nicht wieder online. Das Update wurde möglicherweise nicht abgeschlossen — prüfen Sie den Backend-Host.'
-    }
+    },
+    // Receipt-driven update status (Task 11) — currently falling back to
+    // English until the strings are reviewed by a German translator.
+    updateSucceeded: 'Update applied successfully (state.db @ {sha}).',
+    updateConflict: 'Update conflict in: {files}',
+    updateConflictResolve:
+      'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
+    updateFailed: 'Update {outcome}: {error}'
   },
   handoffTour: {
     profileTitle: 'Ihre erste Aufgabe läuft im Standardprofil',

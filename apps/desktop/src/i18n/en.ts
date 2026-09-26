@@ -4268,7 +4268,15 @@ export const en: Translations = {
     versionDetailsRuntimeEmbedded: 'Embedded runtime',
     versionDetailsRuntimeExternal: 'External (uses the machine runtime)',
     versionDetailsInstallId: 'Install ID',
-    versionDetailsUncommittedChanges: 'uncommitted changes'
+    versionDetailsUncommittedChanges: 'uncommitted changes',
+    // Receipt-driven update status (Task 11). The placeholder strings match
+    // the orchestrator receipt shape so the overlay shows the actual outcome
+    // instead of a generic "couldn't reach the update server" lie.
+    updateSucceeded: 'Update applied successfully (state.db @ {sha}).',
+    updateConflict: 'Update conflict in: {files}',
+    updateConflictResolve:
+      'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
+    updateFailed: 'Update {outcome}: {error}'
   },
 
   handoffTour: {

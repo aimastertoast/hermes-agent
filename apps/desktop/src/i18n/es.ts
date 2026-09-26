@@ -4654,7 +4654,14 @@ export const esOverrides = {
       failed: 'Falló la actualización del backend.',
       noReturn:
         'El backend no volvió a estar disponible. Puede que la actualización no se haya completado; revisa el host del backend.'
-    }
+    },
+    // Receipt-driven update status (Task 11) — currently falling back to
+    // English until the strings are reviewed by a Spanish translator.
+    updateSucceeded: 'Update applied successfully (state.db @ {sha}).',
+    updateConflict: 'Update conflict in: {files}',
+    updateConflictResolve:
+      'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
+    updateFailed: 'Update {outcome}: {error}'
   },
   handoffTour: {
     profileTitle: 'Tu primera tarea se ejecuta en el perfil predeterminado',

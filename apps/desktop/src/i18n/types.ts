@@ -3566,6 +3566,14 @@ export interface Translations {
     versionDetailsRuntimeExternal: string
     versionDetailsInstallId: string
     versionDetailsUncommittedChanges: string
+    /** Receipt-driven update status (Task 11): the overlay shows the
+     *  orchestrator's actual outcome instead of a generic "couldn't reach"
+     *  lie. These copy fields back the receipt's `outcome`, `error`, and
+     *  step detail straight into the user's status line. */
+    updateSucceeded: string
+    updateConflict: string
+    updateConflictResolve: string
+    updateFailed: string
   }
 
   /** The guided first run's pre-written opening line — banked, not generated,

@@ -4674,7 +4674,14 @@ export const frOverrides = {
       failed: 'Échec de la mise à jour du backend.',
       noReturn:
         "Le backend ne s'est pas reconnecté. La mise à jour n'est peut-être pas terminée — vérifiez l'hôte du backend."
-    }
+    },
+    // Receipt-driven update status (Task 11) — currently falling back to
+    // English until the strings are reviewed by a French translator.
+    updateSucceeded: 'Update applied successfully (state.db @ {sha}).',
+    updateConflict: 'Update conflict in: {files}',
+    updateConflictResolve:
+      'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
+    updateFailed: 'Update {outcome}: {error}'
   },
   handoffTour: {
     profileTitle: 'Votre première tâche utilise le profil par défaut',
