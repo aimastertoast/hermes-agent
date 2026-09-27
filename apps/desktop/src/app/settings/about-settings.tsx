@@ -11,6 +11,7 @@ import { $desktopVersion, checkBackendUpdates, refreshDesktopVersion } from '@/s
 import { SectionHeading, SettingsContent } from './primitives'
 import { SETTING_IDS, settingElementId } from './settings-manifest'
 import { UninstallSection } from './uninstall-section'
+import { UpdatesSettings } from './updates-settings'
 import { useSettingDeepLink } from './use-setting-deep-link'
 
 interface AboutSettingsProps {
@@ -60,6 +61,7 @@ function AppUpdatesSettings({ includeUninstall }: AppUpdatesSettingsProps): Reac
           {/* Client and remote backend updates are independent. Only the client has release notes. */}
           {remote && <UpdateStatusCard showReleaseNotes={false} target="backend" />}
         </div>
+        <UpdatesSettings />
         {version && <VersionDetails version={version} />}
         {includeUninstall && <UninstallSection />}
       </div>

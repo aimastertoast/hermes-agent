@@ -1464,6 +1464,17 @@ export interface ActionResponse {
   already_running?: boolean
 }
 
+export interface UpdateReceipt {
+  receipt_id: string
+  outcome: 'success' | 'failed' | 'conflict' | 'aborted' | 'partial' | 'catastrophic' | 'no-op' | string
+  error?: string
+  rolled_back?: boolean
+  acknowledged?: boolean
+  steps?: ReadonlyArray<{ name: string; ok: boolean; detail?: unknown; warning?: string }>
+  pre_state?: Record<string, unknown>
+  post_state?: Record<string, unknown>
+}
+
 export interface UpdateReceiptSummary {
   outcome: 'running' | 'success' | 'partial' | 'failed' | 'refused' | string
   started_at: string | null

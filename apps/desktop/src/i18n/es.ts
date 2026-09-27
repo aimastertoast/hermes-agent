@@ -1610,7 +1610,16 @@ export const esOverrides = {
       driverHealth: 'Estado del controlador'
     },
     about: {
-      updates: 'Actualizaciones'
+      updates: 'Actualizaciones',
+      updateModes: {
+        title: 'Update behavior',
+        safeModeAutoLabel: 'Auto-apply safe updates',
+        safeModeAutoDescription:
+          'When enabled, updates that don’t change your schema, config, or MCP servers are applied automatically.',
+        allowLocalAheadLabel: 'Allow Update Now when local is ahead',
+        allowLocalAheadDescription:
+          'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
+      }
     },
     config: {
       minimizeToTrayTitle: 'Minimizar a la bandeja',
@@ -4654,7 +4663,17 @@ export const esOverrides = {
       failed: 'Falló la actualización del backend.',
       noReturn:
         'El backend no volvió a estar disponible. Puede que la actualización no se haya completado; revisa el host del backend.'
-    }
+    },
+    // Receipt-driven update status (Task 11) — currently falling back to
+    // English until the strings are reviewed by a Spanish translator.
+    updateSucceeded: 'Update applied successfully (state.db @ {sha}).',
+    updateConflict: 'Update conflict in: {files}',
+    updateConflictResolve:
+      'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
+    updateFailed: 'Update {outcome}: {error}',
+    // Receipt-driven overlay actions (Task 13) — pending translator review.
+    acknowledge: 'Acknowledge',
+    viewReceipt: 'View receipt'
   },
   handoffTour: {
     profileTitle: 'Tu primera tarea se ejecuta en el perfil predeterminado',

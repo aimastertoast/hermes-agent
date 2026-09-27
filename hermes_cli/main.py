@@ -2479,6 +2479,16 @@ def cmd_update(args):
     from pm import InstallError
 
     try:
+        if getattr(args, "use_orchestrator", False):
+            # New 7-step orchestrator path. Off by default behind --use-orchestrator
+            # while it is being rolled out. The wrapper handles receipts, locks
+            # and gateway swap itself, so the legacy receipt finalization in the
+            # except/else/finally clauses below is a no-op for this branch
+            # (no pending legacy receipt to finalize).
+            from hermes_cli.update_cmd import _cmd_update_via_orchestrator
+
+            sys.exit(_cmd_update_via_orchestrator(args, gateway_mode=gateway_mode))
+
         _cmd_update_impl(args, gateway_mode=gateway_mode)
     except (InstallError, OSError, subprocess.SubprocessError) as exc:
         print(f"✗ Update failed: {exc}")

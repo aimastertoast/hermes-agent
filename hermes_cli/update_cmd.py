@@ -1894,6 +1894,83 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
 
 
+def _orchestrator_outcome_to_exit_code(outcome) -> int:
+    """Translate an ``UpdateOutcome`` into a CLI exit code.
+
+    The orchestrator's ``exit_code`` field defaults to ``0`` for every terminal
+    branch that does not explicitly override it (success, aborted, conflict,
+    failed, partial, catastrophic, no-op). Only the ``receipt-write-failed``
+    success branch sets it to ``1``. We rely on ``outcome.exit_code`` when it
+    is set, and otherwise fall back to a deterministic mapping so callers see
+    a non-zero exit for any non-success outcome — matches the legacy path's
+    contract and the test cases in
+    ``hermes_cli/tests/update/test_update_cmd_wrapper.py``.
+    """
+    if outcome.exit_code:
+        return outcome.exit_code
+    if outcome.outcome in ("success", "no-op"):
+        return 0
+    return 1
+
+
+def _cmd_update_via_orchestrator(args, gateway_mode: bool) -> int:
+    """Run the new ``run_update`` orchestrator as the update entry point.
+
+    Thin wrapper around ``hermes_cli.update_orchestrator.run_update``. Wired
+    in ``cmd_update`` behind the ``--use-orchestrator`` flag so the legacy
+    ``_cmd_update_impl`` path stays the default. Returns the CLI exit code
+    directly so the click handler can ``sys.exit(code)`` it.
+
+    ``gateway_mode`` is accepted for parity with ``_cmd_update_impl`` and is
+    currently unused: the orchestrator handles gateway pause/resume itself
+    via the ``gateway`` kwarg, which is not yet exposed on the CLI surface
+    (no gateway currently runs while the orchestrator is the entry point).
+    """
+    from hermes_cli.update_orchestrator import run_update as _run_update
+
+    repo = _m().PROJECT_ROOT
+    home = Path(get_hermes_home())
+
+    print("☤ Updating Hermes Agent (orchestrator)...")
+
+    outcome = _run_update(
+        repo=repo,
+        home=home,
+        force=getattr(args, "force", False),
+        auto_apply_safe=getattr(args, "auto_apply_safe", False),
+    )
+
+    if outcome.outcome == "conflict":
+        # Conflicts are left in MERGE_HEAD by the orchestrator (per spec). The
+        # user resolves them out-of-band and re-runs update; we surface the
+        # receipt id and the conflict markers so the operator knows the work
+        # that is sitting on disk.
+        print(f"✗ Update aborted: merge conflicts (receipt {outcome.receipt_id or '<none>'})")
+        for step in outcome.steps:
+            if step.get("name") == "merge" and not step.get("ok", True):
+                detail = step.get("detail") or []
+                if isinstance(detail, (list, tuple)):
+                    for path in detail:
+                        print(f"    CONFLICT  {path}")
+                elif detail:
+                    print(f"    CONFLICT  {detail}")
+        print(f"    Resolve with: cd {repo} && git merge --abort   # or resolve manually, then re-run")
+    elif outcome.outcome == "aborted":
+        print(f"✗ Update aborted: {outcome.error or 'unknown'}")
+    elif outcome.outcome == "failed":
+        print(f"✗ Update failed: {outcome.error or 'unknown'}"
+              + (" (rolled back from snapshot)" if outcome.rolled_back else ""))
+    elif outcome.outcome == "partial":
+        print(f"✗ Update partial: {outcome.error or 'gateway-swap-failed'}")
+    elif outcome.outcome == "catastrophic":
+        print(f"✗ Update catastrophic: {outcome.error or 'unknown'} (snapshot restore failed)")
+    elif outcome.outcome == "no-op":
+        print(f"→ Update skipped: {outcome.error or 'not a git install'}")
+    # success: orchestrator already wrote a receipt; nothing else to print.
+
+    return _orchestrator_outcome_to_exit_code(outcome)
+
+
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
 # Names external plugins imported from this module before the Sep 2026 decomposition.
 # Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
