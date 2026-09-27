@@ -7,6 +7,7 @@ Extracted from ``hermes_cli.web_server``; helpers/state that tests monkeypatch o
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import secrets
 import subprocess
@@ -238,6 +239,29 @@ async def update_hermes():
             _UPDATE_REFUSAL_ERROR_CODES.get(refusal.code, "update_not_in_place"), refusal.message, refusal.update_command,
         )
         record_refusal_receipt(refusal)
+        return response
+
+    # Force-requirement gate: same check the orchestrator runs, but here so
+    # the user gets immediate feedback instead of waiting for the spawned
+    # subprocess to start, run preflight, and then refuse. Honors the desktop
+    # ``$updateAllowLocalAhead`` toggle (a user-armed bypass returns None).
+    from hermes_cli.update_contract import evaluate_update_force_requirement
+
+    project_root = _server_path("PROJECT_ROOT")
+    hermes_home = Path(os.environ.get("HERMES_HOME") or project_root.parent)
+    try:
+        force_refusal = evaluate_update_force_requirement(project_root, home=hermes_home)
+    except Exception:
+        # The orchestrator re-runs this; fail open here so a transient read
+        # error doesn't 500 the user's "Update Now" click.
+        force_refusal = None
+    if force_refusal is not None:
+        response = _update_refused(
+            _UPDATE_REFUSAL_ERROR_CODES.get(force_refusal.code, force_refusal.code),
+            force_refusal.message,
+            force_refusal.update_command,
+        )
+        record_refusal_receipt(force_refusal)
         return response
 
     existing = _ACTION_PROCS.get("hermes-update")

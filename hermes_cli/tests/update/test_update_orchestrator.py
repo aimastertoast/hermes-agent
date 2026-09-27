@@ -73,6 +73,15 @@ def update_world(isolated_hermes_home, hermetic_git_repo, fake_gateway, monkeypa
     # /api/status endpoint. The fake gateway is already serving on `fake_gateway.port`.
     (home / "gateway.port").write_text(str(fake_gateway.port))
 
+    # Arm the ``$updateAllowLocalAhead`` toggle so the orchestrator's
+    # force-requirement gate (Step 1b) does not block tests that intentionally
+    # create a local-ahead state to exercise later steps (e.g. merge-conflict
+    # scenarios). Tests that want to verify the gate itself should NOT use
+    # this fixture and should leave the toggle off.
+    from hermes_cli.update_settings import UpdateSettings, write_update_settings
+
+    write_update_settings(home, UpdateSettings(allow_local_ahead=True))
+
     return UpdateWorld(home=home, repo=repo, gateway=fake_gateway)
 
 
@@ -241,6 +250,80 @@ def test_failure_12_no_common_ancestor(update_world):
     subprocess.check_call(["git", "-C", str(update_world.repo), "remote", "set-url", "origin", str(new_remote)])
     result = run_update(repo=update_world.repo, home=update_world.home, gateway=update_world.gateway)
     assert result.outcome == "conflict"
+
+
+# Step 1b: force-requirement gate (M2b)
+
+def test_local_ahead_gate_blocks_when_toggle_off(update_world):
+    """The ``$updateAllowLocalAhead`` toggle is OFF (deleted from disk) → the
+    orchestrator's force-requirement gate blocks the update with a clear
+    refusal message instead of silently creating a backup.
+
+    The ``update_world`` fixture arms the toggle by default; this test
+    deletes the toggle file so the gate fires, then verifies that the
+    orchestrator aborts with ``local-ahead`` BEFORE doing any destructive
+    work (no snapshot, no merge).
+    """
+    from hermes_cli.update_settings import settings_path
+
+    # Disable the toggle that the fixture arms.
+    settings_path(update_world.home).unlink()
+
+    # Make local ahead of origin/main with one unpushed commit.
+    (update_world.repo / "unpushed.txt").write_text("local-only")
+    subprocess.check_call(["git", "-C", str(update_world.repo), "add", "."])
+    subprocess.check_call(["git", "-C", str(update_world.repo), "commit", "-m", "unpushed"])
+
+    result = run_update(
+        repo=update_world.repo,
+        home=update_world.home,
+        gateway=update_world.gateway,
+    )
+    assert result.outcome == "aborted"
+    # The orchestrator surfaces the refusal's user-facing message, not the
+    # short code, so the dashboard / action log reads as a clear instruction.
+    assert "ahead of upstream" in (result.error or "").lower()
+
+    # Verify the receipt recorded the force-check step.
+    receipt = read_latest_pipeline_receipt(update_world.home)
+    assert receipt is not None
+    assert receipt.outcome == "aborted"
+    force_step = next(
+        (s for s in receipt.steps if s.get("name") == "force_check"), None
+    )
+    assert force_step is not None
+    assert force_step["ok"] is False
+    assert force_step["detail"] == "local-ahead"
+
+
+def test_local_ahead_gate_proceeds_when_toggle_on(update_world):
+    """With the toggle armed (the ``update_world`` fixture default), the
+    orchestrator proceeds past the gate to the merge step. The backup branch
+    is still created (failure-mode #5 protection).
+    """
+    # Local ahead: one unpushed commit on top of origin/main.
+    (update_world.repo / "unpushed.txt").write_text("local-only")
+    subprocess.check_call(["git", "-C", str(update_world.repo), "add", "."])
+    subprocess.check_call(["git", "-C", str(update_world.repo), "commit", "-m", "unpushed"])
+
+    result = run_update(
+        repo=update_world.repo,
+        home=update_world.home,
+        gateway=update_world.gateway,
+    )
+    # No remote commit yet → fast-forward, nothing to merge. Backup branch
+    # is created (orchestrator's safety net); outcome is success because the
+    # local commit survives the no-op pull.
+    assert result.outcome == "success"
+
+    # Receipt should record force_check OK before the backup step.
+    receipt = read_latest_pipeline_receipt(update_world.home)
+    assert receipt is not None
+    force_step = next(
+        (s for s in receipt.steps if s.get("name") == "force_check"), None
+    )
+    assert force_step is not None
+    assert force_step["ok"] is True
 
 
 # Step 5: verify failures

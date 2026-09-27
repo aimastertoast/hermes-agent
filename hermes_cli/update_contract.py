@@ -330,7 +330,11 @@ def _is_origin_force_pushed(repo: Path) -> bool:
     return is_local_orphaned
 
 
-def evaluate_update_force_requirement(project_root: Path) -> Optional[UpdateRefusal]:
+def evaluate_update_force_requirement(
+    project_root: Path,
+    *,
+    home: Optional[Path] = None,
+) -> Optional[UpdateRefusal]:
     """Return an :class:`UpdateRefusal` when the user should be required to force.
 
     Distinct from :func:`evaluate_update_admission`, which refuses install
@@ -340,8 +344,19 @@ def evaluate_update_force_requirement(project_root: Path) -> Optional[UpdateRefu
     confirmation:
 
     - ``force-pushed`` — upstream history was rewritten; checked first because
-      it is the more dangerous of the two.
-    - ``local-ahead`` — local has commits not on upstream.
+      it is the more dangerous of the two. Never bypassed by user toggles
+      (force-pushed is a server-side event the user cannot remediate from
+      the settings panel).
+    - ``local-ahead`` — local has commits not on upstream. Bypassed when the
+      desktop's ``$updateAllowLocalAhead`` toggle is armed (the orchestrator
+      creates a backup branch first so the user can recover).
+
+    Reads the toggle from ``HERMES_HOME/update_settings.json`` via
+    :func:`hermes_cli.update_settings.load_update_settings`. When ``home`` is
+    not provided, falls back to ``project_root.parent`` — the closest
+    reasonable default for a git checkout whose parent directory happens to
+    be ``HERMES_HOME``. Callers should pass an explicit ``home`` when they
+    have one (the orchestrator always does).
 
     Returns ``None`` if a normal (non-forced) update is fine. Never raises;
     on any internal error it fails OPEN (returns ``None``) so we don't block
@@ -356,8 +371,47 @@ def evaluate_update_force_requirement(project_root: Path) -> Optional[UpdateRefu
     try:
         ahead = _count_local_commits_ahead(project_root)
         if ahead is not None and ahead > 0:
+            # The local-ahead gate respects the desktop's toggle. A force-pushed
+            # upstream is NEVER bypassed — that's a server-side event whose
+            # only correct response is for the user to re-fetch and reconcile,
+            # not for a "force through" toggle.
+            if _is_local_ahead_bypass_armed(home, project_root):
+                logger.debug(
+                    "Local-ahead refusal suppressed by $updateAllowLocalAhead toggle "
+                    "(%d unpushed commit(s)); backup branch will be created.",
+                    ahead,
+                )
+                return None
             return LOCAL_AHEAD_REFUSAL
     except Exception as exc:
         logger.debug("Local-ahead check failed (failing open): %s", exc)
 
     return None
+
+
+def _is_local_ahead_bypass_armed(
+    home: Optional[Path], project_root: Path
+) -> bool:
+    """Return True iff the desktop's local-ahead bypass toggle is armed.
+
+    Reads ``HERMES_HOME/update_settings.json`` when ``home`` is given, else
+    falls back to ``project_root.parent`` (best-effort: a git checkout whose
+    parent directory is the active ``HERMES_HOME``). Never raises — a
+    missing/corrupt/unreadable file counts as "not armed".
+    """
+    if home is None:
+        # Best-effort default; callers should pass home explicitly. We pick
+        # project_root.parent because the orchestrator's repo path is usually
+        # HERMES_HOME/repo in a git install, so HERMES_HOME is the parent.
+        home = project_root.parent
+
+    try:
+        from hermes_cli.update_settings import load_update_settings
+        settings = load_update_settings(home)
+    except Exception as exc:
+        logger.debug("update_settings load failed (failing closed): %s", exc)
+        return False
+
+    if settings is None:
+        return False
+    return settings.allow_local_ahead

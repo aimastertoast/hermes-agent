@@ -423,6 +423,41 @@ def run_update(
         steps.append({"name": "preflight", "ok": False, "warning": "lock-exists"})
         return UpdateOutcome(outcome="aborted", error=ERR_UPDATE_IN_PROGRESS, steps=steps)
 
+    # Step 1b: force-requirement gate. The user-side toggle
+    # ``$updateAllowLocalAhead`` (mirrored to ``HERMES_HOME/update_settings.json``
+    # by the desktop's electron-main IPC) lets a user with unpushed local
+    # commits opt into the update; the orchestrator creates a backup branch
+    # first so the user can recover. ``force-pushed`` is NEVER bypassed — it's
+    # a server-side event whose only correct response is for the user to
+    # re-fetch and reconcile, not for a "force through" toggle.
+    try:
+        from hermes_cli.update_contract import evaluate_update_force_requirement
+
+        force_refusal = evaluate_update_force_requirement(repo, home=home)
+    except Exception as exc:
+        logger.debug("Force-requirement gate failed (failing open): %s", exc)
+        force_refusal = None
+    if force_refusal is not None:
+        steps.append({
+            "name": "force_check",
+            "ok": False,
+            "detail": force_refusal.code,
+        })
+        receipt = UpdateReceiptRecord(
+            receipt_id=receipt_id, outcome="aborted", error=force_refusal.code,
+            rolled_back=False, steps=steps,
+            pre_state={}, post_state={},
+        )
+        try:
+            _write_pipeline_receipt(home, receipt)
+        except OSError:
+            pass
+        return UpdateOutcome(
+            outcome="aborted", error=force_refusal.message,
+            steps=steps, receipt_id=receipt_id,
+        )
+    steps.append({"name": "force_check", "ok": True})
+
     try:
         # ---- Step 2: snapshot ----
         try:
