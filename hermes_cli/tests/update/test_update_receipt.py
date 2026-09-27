@@ -15,7 +15,9 @@ import pytest
 from hermes_cli.update_receipt import (
     UpdateReceiptRecord,
     acknowledge_pipeline_receipt,
+    latest_pipeline_receipt_summary,
     read_latest_pipeline_receipt,
+    read_latest_pipeline_receipt_dict,
     write_pipeline_receipt,
 )
 
@@ -285,3 +287,161 @@ class TestPipelineReceiptPathTraversal:
         )
         write_pipeline_receipt(home, receipt)
         assert acknowledge_pipeline_receipt(home, receipt.receipt_id) is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M1: profile-aware JSON serialization for the API route
+#
+# The desktop overlay calls ``/api/hermes/update/receipt`` with
+# ``?profile=X`` (``profileScoped()``). The Python route honors the profile
+# by flipping ``HERMES_HOME`` via ``_config_profile_scope`` and then calls
+# ``read_latest_pipeline_receipt_dict(home)`` to get a JSON-ready dict.
+#
+# What the tests pin:
+# 1. ``read_latest_pipeline_receipt_dict`` returns None when no receipt exists.
+# 2. It returns a plain dict (not a dataclass) on success — the FastAPI
+#    response layer can't serialize dataclasses directly.
+# 3. ``latest_pipeline_receipt_summary`` returns None when no receipt exists
+#    AND a dict with the ``UpdateReceiptSummary`` shape when one does.
+# 4. Profile scoping: a receipt written to profile A's home is INVISIBLE
+#    when read from profile B's home. Mirrors the desktop's
+#    ``?profile=X`` semantics.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPipelineReceiptJsonSerialization:
+    """The FastAPI route handler can't serialize dataclasses; these helpers
+    bridge the pipeline reader to a JSON-ready dict."""
+
+    def test_read_dict_returns_none_when_no_receipt(self, isolated_hermes_home):
+        """No pipeline receipt on disk → None. Caller raises 404."""
+        assert read_latest_pipeline_receipt_dict(isolated_hermes_home) is None
+
+    def test_read_dict_returns_plain_dict_on_success(self, isolated_hermes_home):
+        """A receipt on disk serializes to a plain dict (NOT a dataclass) so
+        FastAPI's JSON encoder accepts it without an explicit ``model_dump``."""
+        receipt_id = secrets.token_hex(8)
+        write_pipeline_receipt(
+            isolated_hermes_home,
+            UpdateReceiptRecord(
+                receipt_id=receipt_id,
+                outcome="success",
+                error=None,
+                rolled_back=False,
+                acknowledged=False,
+                strategy="merge",
+                applied_via="user-click",
+            ),
+        )
+        payload = read_latest_pipeline_receipt_dict(isolated_hermes_home)
+        assert isinstance(payload, dict)
+        assert payload["receipt_id"] == receipt_id
+        assert payload["outcome"] == "success"
+
+    def test_summary_returns_none_when_no_receipt(self, isolated_hermes_home):
+        assert latest_pipeline_receipt_summary(isolated_hermes_home) is None
+
+    def test_summary_shape_matches_desktop_contract(self, isolated_hermes_home):
+        """The summary keys mirror ``UpdateReceiptSummary`` in the desktop
+        type definitions. Pinning the shape here so a future refactor that
+        drops a key (e.g. ``fleet_states``) breaks the test."""
+        write_pipeline_receipt(
+            isolated_hermes_home,
+            UpdateReceiptRecord(
+                receipt_id=secrets.token_hex(8),
+                outcome="success",
+                error=None,
+                rolled_back=False,
+                acknowledged=False,
+            ),
+        )
+        summary = latest_pipeline_receipt_summary(isolated_hermes_home)
+        assert summary is not None
+        assert set(summary.keys()) == {
+            "outcome",
+            "started_at",
+            "finished_at",
+            "pre_sha",
+            "post_sha",
+            "post_version",
+            "fleet_states",
+        }
+        assert summary["outcome"] == "success"
+        # Orchestrator doesn't track these — null is correct.
+        assert summary["started_at"] is None
+        assert summary["finished_at"] is None
+        assert summary["pre_sha"] is None
+        assert summary["post_sha"] is None
+        assert summary["post_version"] is None
+        # Single-host orchestrator; no fleet.
+        assert summary["fleet_states"] == []
+
+
+class TestPipelineReceiptProfileScoping:
+    """M1: profile-scoped reads — each profile sees only its own receipts.
+
+    The desktop's ``profileScoped()`` adds ``?profile=X`` to the receipt
+    API call; the route flips ``HERMES_HOME`` to the target profile's home
+    via ``_config_profile_scope``. These tests bypass the FastAPI layer
+    and exercise the read helpers directly so the contract is pinned
+    without the Starlette dependency.
+    """
+
+    def test_receipt_isolated_between_profiles(self, tmp_path, monkeypatch):
+        """A receipt written to profile A's home is INVISIBLE when read from
+        profile B's home. Mirrors the desktop's ``?profile=X`` semantics."""
+        from hermes_constants import set_hermes_home_override
+
+        home_a = tmp_path / "profile-a"
+        home_b = tmp_path / "profile-b"
+        home_a.mkdir()
+        home_b.mkdir()
+
+        # Write a receipt to profile A.
+        rid = secrets.token_hex(8)
+        write_pipeline_receipt(
+            home_a,
+            UpdateReceiptRecord(
+                receipt_id=rid,
+                outcome="success",
+                error=None,
+                rolled_back=False,
+                acknowledged=False,
+            ),
+        )
+
+        # Read from profile A → visible.
+        token_a = set_hermes_home_override(home_a)
+        try:
+            payload = read_latest_pipeline_receipt_dict(home_a)
+            assert payload is not None
+            assert payload["receipt_id"] == rid
+        finally:
+            from hermes_constants import reset_hermes_home_override
+            reset_hermes_home_override(token_a)
+
+        # Read from profile B → invisible (the request landed on A's home,
+        # but B's home has no receipt).
+        assert read_latest_pipeline_receipt_dict(home_b) is None
+
+    def test_summary_inherits_profile_isolation(self, tmp_path):
+        """Summary reads follow the same per-home scoping rule."""
+        from hermes_cli.update_receipt import latest_pipeline_receipt_summary
+
+        home_a = tmp_path / "profile-a"
+        home_b = tmp_path / "profile-b"
+        home_a.mkdir()
+        home_b.mkdir()
+
+        write_pipeline_receipt(
+            home_a,
+            UpdateReceiptRecord(
+                receipt_id=secrets.token_hex(8),
+                outcome="conflict",
+                error="merge-conflict",
+                rolled_back=False,
+                acknowledged=False,
+            ),
+        )
+        # Profile A sees the summary; profile B does not.
+        assert latest_pipeline_receipt_summary(home_a) is not None
+        assert latest_pipeline_receipt_summary(home_b) is None

@@ -429,6 +429,56 @@ def read_latest_receipt() -> Optional[dict[str, Any]]:
     return None
 
 
+def read_latest_pipeline_receipt_dict(home: Path) -> Optional[dict[str, Any]]:
+    """Pipeline-path receipt serialized to a plain dict (for JSON transport).
+
+    Profile-aware counterpart to the legacy :func:`read_latest_receipt` —
+    the API layer (which lives behind ``_config_profile_scope`` and must
+    serialize to JSON) calls this instead of ``read_latest_pipeline_receipt``
+    directly so the dataclass → dict conversion is centralized and tested.
+
+    The desktop overlay reads this from ``/api/hermes/update/receipt``,
+    which sends ``?profile=X`` to land on the target profile's home. The
+    orchestrator's 7-step pipeline writes receipts to ``<home>/update_receipts/``;
+    reading from any other path silently returns ``None`` (the desktop then
+    shows no overlay — the "no receipt" branch is the same UX as a fresh
+    install).
+    """
+    from dataclasses import asdict
+
+    record = read_latest_pipeline_receipt(home)
+    if record is None:
+        return None
+    return asdict(record)
+
+
+def latest_pipeline_receipt_summary(home: Path) -> Optional[dict[str, Any]]:
+    """Compact summary derived from the pipeline receipt.
+
+    The orchestrator's :class:`UpdateReceiptRecord` doesn't track
+    started_at / finished_at / git SHAs (the snapshot captures state.db
+    and config.yaml hashes, not commit refs), so the corresponding fields
+    serialize as ``None`` — the desktop overlay treats them as "not
+    available" rather than "failed". Outcome is populated; the
+    fleet-equivalent list is empty because the orchestrator is single-host.
+    """
+    record = read_latest_pipeline_receipt(home)
+    if record is None:
+        return None
+    try:
+        return {
+            "outcome": record.outcome,
+            "started_at": None,
+            "finished_at": None,
+            "pre_sha": None,
+            "post_sha": None,
+            "post_version": None,
+            "fleet_states": [],
+        }
+    except Exception:
+        return None
+
+
 def _profile_homes() -> list[tuple[str, Path]]:
     """``(profile, home)`` for the default home plus every valid named profile dir, sorted."""
     from hermes_cli.profiles import _get_default_hermes_home, _get_profiles_root, _PROFILE_ID_RE
