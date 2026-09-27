@@ -169,3 +169,115 @@ class TestVerifyOrRollback:
         monkeypatch.setattr(uv, "capture_pre_state",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
         assert uv.capture_and_record_pre_state() is None
+
+
+class TestHeadShaResolvesHermesCheckout:
+    """`pre_sha` must come from the Hermes checkout, never the caller's cwd.
+
+    Regression: `_head_sha` ran `git rev-parse HEAD` with no `cwd=`, so a
+    standalone verifier (or the completion child) launched from an unrelated
+    directory recorded that repo's HEAD. `rollback_update` then ran
+    `git reset --hard <unrelated-sha>` inside the Hermes checkout.
+    """
+
+    @staticmethod
+    def _seed_repo(root, name, content):
+        import subprocess as sp
+        repo = root / name
+        repo.mkdir(parents=True)
+        sp.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+        (repo / "a.txt").write_text(content, encoding="utf-8")
+        sp.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        # Identity is explicit: this machine has no global user.email/user.name,
+        # and a fresh tmp repo would otherwise fail the commit.
+        sp.run(["git", "-c", "user.email=fixture@example.invalid",
+                "-c", "user.name=Fixture", "commit", "-qm", name],
+               cwd=repo, check=True, capture_output=True)
+        return repo, sp.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True,
+                            text=True, check=True).stdout.strip()
+
+    def test_head_sha_uses_the_given_checkout_not_the_process_cwd(self, tmp_path, monkeypatch):
+        hermes, hermes_sha = self._seed_repo(tmp_path, "hermes-agent", "hermes\n")
+        other, other_sha = self._seed_repo(tmp_path, "unrelated-repo", "other\n")
+        assert hermes_sha != other_sha
+
+        # Park the process cwd inside the UNRELATED repo — the old
+        # no-cwd implementation would return other_sha here.
+        monkeypatch.chdir(other)
+
+        assert uv._head_sha(hermes) == hermes_sha
+        assert uv._head_sha(hermes) != other_sha
+
+    def test_head_sha_returns_empty_outside_a_repo(self, tmp_path):
+        plain = tmp_path / "not-a-repo"
+        plain.mkdir()
+        assert uv._head_sha(plain) == ""
+
+
+class TestRolledBackRequiresResetOk:
+    """`rolled_back` must reflect the CODE moving back, not just config restore.
+
+    Regression: `rolled_back = reset_ok or bool(restored_profiles)` reported
+    success when config snapshots were restored but `git reset --hard` failed,
+    so the receipt claimed a rollback that never happened.
+    """
+
+    def _state(self, home):
+        state = uv.capture_pre_state([("default", home)], backup=True)
+        state["pre_sha"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        return state
+
+    def test_config_restore_without_reset_reports_not_rolled_back(
+            self, two_homes, tmp_path, monkeypatch):
+        import subprocess as sp
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        sp.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
+
+        state = self._state(two_homes["root"])
+        # Force a failing check so rollback runs.
+        (two_homes["root"] / "config.yaml").write_text(yaml.safe_dump({}), encoding="utf-8")
+
+        recorded = {}
+        monkeypatch.setattr(
+            "hermes_cli.update_receipt.record_verification",
+            lambda checks, rolled_back, failed_check: recorded.update(
+                rolled_back=rolled_back, failed_check=failed_check))
+
+        # pre_sha is absent from this repo, so `git reset --hard` must fail.
+        uv.verify_or_rollback(state, checkout=checkout)
+
+        assert recorded["failed_check"] == "config_parity"
+        # Configs WERE restored (snapshot existed) — but the tree did not move.
+        assert recorded["rolled_back"] is False, (
+            "receipt claimed rolled_back=True although git reset --hard failed")
+
+    def test_rollback_refuses_to_reset_with_an_empty_pre_sha(
+            self, two_homes, tmp_path, monkeypatch):
+        import subprocess as sp
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        sp.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
+        (checkout / "a.txt").write_text("x\n", encoding="utf-8")
+        sp.run(["git", "add", "."], cwd=checkout, check=True, capture_output=True)
+        sp.run(["git", "-c", "user.email=fixture@example.invalid",
+                "-c", "user.name=Fixture", "commit", "-qm", "x"],
+               cwd=checkout, check=True, capture_output=True)
+
+        state = self._state(two_homes["root"])
+        state["pre_sha"] = ""
+
+        seen = {}
+
+        def _spy(cmd, **kwargs):
+            seen["cmd"] = cmd
+            return sp.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(uv.subprocess, "run", _spy)
+
+        outcome = uv.rollback_update(state, checkout=checkout, pre_sha="",
+                                    failed_check="config_parity")
+
+        assert "reset" not in seen.get("cmd", []), "git reset was attempted with an empty SHA"
+        assert outcome["reset_ok"] is False
+        assert outcome["reset_detail"], "an empty pre_sha must leave an explanatory detail"

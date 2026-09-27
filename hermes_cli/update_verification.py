@@ -84,10 +84,29 @@ def _port_accepts(port: int, host: str = "127.0.0.1") -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def _head_sha() -> str:
+def hermes_checkout() -> Path:
+    """The Hermes source checkout this module was loaded from.
+
+    ``update_verification`` is spawned as a completion child by
+    ``scripts/desktop-update/windows.ps1`` and re-invoked by hand for retries,
+    in both cases from an arbitrary working directory. Every git call in this
+    module must be pinned to the checkout, never to the process cwd."""
+    return Path(__file__).resolve().parent.parent
+
+
+def _head_sha(checkout: Optional[Path] = None) -> str:
+    """HEAD of the Hermes checkout — never of the caller's cwd.
+
+    Regression: this ran ``git rev-parse HEAD`` with no ``cwd=``, so a verifier
+    launched from an unrelated repository recorded THAT repository's HEAD into
+    ``pre_sha``; ``rollback_update`` then reset the Hermes checkout to a
+    meaningless SHA. Pin the cwd to the checkout and return ``""`` on any
+    failure (an empty ``pre_sha`` disables the code rollback rather than
+    guessing)."""
+    target = Path(checkout) if checkout is not None else hermes_checkout()
     try:
         result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
-                                text=True, check=False)
+                                text=True, check=False, cwd=str(target))
         return result.stdout.strip() if result.returncode == 0 else ""
     except OSError:
         return ""
@@ -210,9 +229,21 @@ def run_verification(pre_state: Dict[str, Any], *,
 def rollback_update(pre_state: Dict[str, Any], *, checkout: Path, pre_sha: str,
                     failed_check: str) -> Dict[str, Any]:
     """git reset --hard to the pre-update SHA, restore config snapshots from
-    their backup_config copies, restart the gateway best-effort."""
-    reset = subprocess.run(["git", "reset", "--hard", pre_sha], cwd=str(checkout),
-                           capture_output=True, text=True, check=False)
+    their backup_config copies, restart the gateway best-effort.
+
+    An empty ``pre_sha`` disables the code rollback: ``git reset --hard ""``
+    cannot succeed, and running it anyway would only produce a confusing
+    error. The config restore below still runs, but ``reset_ok`` stays False
+    so the receipt cannot claim the code was rolled back."""
+    reset_ok = False
+    reset_detail: str
+    if not pre_sha:
+        reset_detail = "no pre_sha recorded; code rollback skipped (checkout untouched)"
+    else:
+        reset = subprocess.run(["git", "reset", "--hard", pre_sha], cwd=str(checkout),
+                               capture_output=True, text=True, check=False)
+        reset_ok = reset.returncode == 0
+        reset_detail = (reset.stderr or reset.stdout).strip()
     restored: List[str] = []
     restore_errors: List[str] = []
     for name, snapshot in pre_state.get("profiles", {}).items():
@@ -225,7 +256,7 @@ def rollback_update(pre_state: Dict[str, Any], *, checkout: Path, pre_sha: str,
             except OSError as exc:
                 restore_errors.append(f"{name}: {exc}")
     gateway_restart = ""
-    if restored or reset.returncode == 0:
+    if reset_ok or restored:
         try:
             subprocess.run([sys.executable, "-m", "hermes_cli.main", "gateway", "start", "--all"],
                            capture_output=True, timeout=60, check=False)
@@ -234,20 +265,20 @@ def rollback_update(pre_state: Dict[str, Any], *, checkout: Path, pre_sha: str,
             # RuntimeError covers the tests/conftest.py live-system guard that
             # refuses to spawn a real gateway from inside a pytest worker.
             gateway_restart = "failed"
-    return {"reset_ok": reset.returncode == 0,
-            "reset_detail": (reset.stderr or reset.stdout).strip(),
+    return {"reset_ok": reset_ok,
+            "reset_detail": reset_detail,
             "restored_profiles": restored, "restore_errors": restore_errors,
             "gateway_restart": gateway_restart, "failed_check": failed_check}
 
 
-def capture_and_record_pre_state() -> Optional[Dict[str, Any]]:
+def capture_and_record_pre_state(checkout: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """G3 §5.1 Pre hook for _cmd_update_impl. Best-effort: the guard rail must
     never break the update, so any failure returns None (verification is then
     skipped for this run and the receipt records the skip)."""
     try:
         from hermes_cli.update_receipt import _profile_homes
         state = capture_pre_state(_profile_homes())
-        state["pre_sha"] = _head_sha()
+        state["pre_sha"] = _head_sha(checkout)
         save_pre_state(state)
         return state
     except Exception:
@@ -269,10 +300,20 @@ def verify_or_rollback(pre_state: Dict[str, Any], *, checkout: Path,
         outcome = rollback_update(pre_state, checkout=checkout,
                                   pre_sha=pre_state.get("pre_sha", ""),
                                   failed_check=failed["name"])
-        rolled_back = outcome["reset_ok"] or bool(outcome["restored_profiles"])
+        # rolled_back tracks the CODE, not the config files. Restoring config
+        # snapshots with the checkout still on the unverified commit is a
+        # partial recovery, and the receipt must say so.
+        rolled_back = outcome["reset_ok"]
         print(f"☤ Update verification FAILED ({failed['name']}): {failed['detail']}")
-        print(f"  Rolled back to {pre_state.get('pre_sha', '')[:12] or 'pre-update state'} "
-              f"(configs restored: {outcome['restored_profiles'] or 'none'})")
+        if rolled_back:
+            print(f"  Rolled back to {pre_state.get('pre_sha', '')[:12] or 'pre-update state'} "
+                  f"(configs restored: {outcome['restored_profiles'] or 'none'})")
+        else:
+            print(f"  Rollback INCOMPLETE — checkout left at "
+                  f"{outcome['reset_detail'] or 'the unverified commit'}; "
+                  f"configs restored: {outcome['restored_profiles'] or 'none'}")
+            print(f"  Recover manually: git -C {checkout} reset --hard "
+                  f"{pre_state.get('pre_sha') or '<pre-update sha>'}")
     record_verification(checks, rolled_back=rolled_back,
                         failed_check=failed["name"] if failed else "")
     for check in checks:
@@ -288,7 +329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help=f"pre-state JSON (default: logs/update_receipts/{PRE_STATE_FILENAME})")
     parser.add_argument("--timeout", type=float, default=LIVENESS_TIMEOUT_SECONDS)
     parser.add_argument("--checkout", type=Path,
-                        default=Path(__file__).resolve().parent.parent,
+                        default=hermes_checkout(),
                         help="git checkout to reset on rollback")
     args = parser.parse_args(argv)
 
@@ -300,7 +341,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     from hermes_cli.update_receipt import (
         _current, begin_update_receipt, finalize_update_receipt,
     )
-    opened_here = _current is None
+    # ``_current`` is a ContextVar OBJECT, never None — the identity check
+    # ``_current is None`` is always False, so begin_update_receipt() never ran
+    # and a standalone verification wrote no receipt at all. Ask the ContextVar
+    # for its value, matching every other reader in update_receipt.py.
+    opened_here = _current.get() is None
     if opened_here:
         begin_update_receipt()
     pre_state = load_pre_state(args.pre_state)
