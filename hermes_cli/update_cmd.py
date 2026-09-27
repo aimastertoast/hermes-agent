@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import NoReturn
 
 from hermes_cli.config import get_hermes_home  # noqa: F401  (re-exported; patched via update_cmd)
-from hermes_cli import update_handoff as _update_handoff
 from hermes_cli.update_cmd_common import _best_effort
 # Captured BEFORE a checkout swap: parent transport/lifecycle never imports new code.
 from hermes_cli.update_completion import run_completion
@@ -299,13 +298,6 @@ def _record_update_step(step: str, ok: bool, detail: str = "") -> None:
     with suppress(Exception):
         from hermes_cli.update_receipt import record_step
         record_step(step, ok, detail)
-
-
-def _repo_root_for_verification() -> "Path":
-    """Checkout the verifier should reset on rollback: the running PROJECT_ROOT."""
-    from pathlib import Path as _Path
-    import hermes_cli.main as _main
-    return _Path(getattr(_main, "PROJECT_ROOT", "."))
 
 
 # A fetch whose transport dead-stalls (HTTP/2 to GitHub on some networks, a black-holed proxy)
@@ -1306,13 +1298,8 @@ def _handle_update_called_process_error(
         print()
         _update_via_zip(
             args, had_desktop_app_before_update=had_desktop_app_before_update,
-            _windows_gateway_resume=_windows_gateway_resume)
-        if desktop_build_ok:
-            # Direct call: _m() shim (hermes_cli.main) does not re-export this name.
-            # The ZIP fallback succeeded -> atexit gateway resume must run full post-update handling.
-            _set_update_applied_new_code(True)
-        if gateway_mode:
-            _write_gateway_update_exit_code(desktop_build_ok)
+            target_sha=target_sha, completion_request=completion_request,
+            **({"target_repository": target_repository} if target_repository else {}))
     else:
         if _called_process_error_is_python_dep_install(e):
             print(f"✗ {stage} (the code update itself succeeded).")
@@ -1342,8 +1329,14 @@ def _finalize_receipt(status: str, debug_message: str) -> None:
 
 def _finish_already_up_to_date(
     git_cmd, branch: str, current_branch: str, _plan, *, gw_input_fn, completion_request: dict) -> None:
-    """"Already up to date" path: restore stash/branch, repair the checkout, catch up the fleet.
-    ``sys.exit(1)`` when the repair is incomplete (after gateway exit code + partial receipt)."""
+    """"Already up to date" path: restore stash/branch, then hand the run to the completion
+    child, which owns the fleet catch-up, the Desktop rebuild and the G3 verify.
+
+    The fleet obligations a no-op update still owes are discharged inside
+    ``update_completion._complete_selected`` (via ``_pending_fleet_restart_needed`` and
+    ``_restart_gateway_fleet_after_update``), NOT here — this function used to inline that
+    tail through helpers that no longer exist in the split update package, which made every
+    no-op update die with ``NameError``. One completion path, one owner."""
     # Restore stash and switch back if we moved. EXCEPTION: a parked branch verified clean +
     # fully merged stays on the target — re-parking on the stale branch recreates the incident.
     if _plan.auto_stash_ref is not None:
@@ -1361,311 +1354,38 @@ def _finish_already_up_to_date(
     elif current_branch not in {branch, "HEAD"}:
         _git_run(git_cmd, ["checkout", current_branch])
 
-    current_checkout_complete = _repair_current_checkout(
-        assume_yes=assume_yes, gateway_mode=gateway_mode,
-        pre_update_snapshot_id=pre_update_snapshot_id,
-        had_desktop_app_before_update=had_desktop_app_before_update,
-        active_lazy_features=active_lazy_features,
-        active_tool_dependencies=active_tool_dependencies, upstream_checked=_plan.upstream_checked,
-        _windows_gateway_resume=_windows_gateway_resume)
-    _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
-    # A prior pull may still owe the fleet a restart; catch up here too, BEFORE the exit
-    # gate so a partial outcome can't strand the fleet on stale code.
-    # Catch up even on the "Already up to date" path — that early return is what left the gateway on stale
-    # code for two days. Runs BEFORE the runtime-verification exit gate below: a vulnerable SQLite runtime
-    # demotes the outcome to partial, but must not strand the fleet on stale code (#91277 fleet contract —
-    # the pending-restart check always executes). Under --no-gateway-restart the
-    # catch-up is deferred instead (executing it would kill the cron's own gateway).
-    _apply_pending_fleet_restart_catchup(defer=no_gateway_restart)
-    # === PERMANENT FIX (2026-09-15): re-verify patches on the no-op path too.
-    # === Defense in depth against R1 — a background `git reset --hard origin/main`
-    # === could strip working-tree patches without firing the post-merge hook,
-    # === and the no-op update would otherwise exit cleanly with a broken tree.
-    _noop_restore = restore_patches(project_root=_m().PROJECT_ROOT)
-    for _name in _noop_restore.patches_applied:
-        print(f"  ✓ patch verified in place: {_name}")
-    for _name, _reason in _noop_restore.patches_drifted:
-        print(f"  ⚠ patch drifted (needs regen): {_name} — {_reason}")
-    if _noop_restore.fatal_error or _noop_restore.patches_with_marker_fail:
-        _finalize_receipt("partial", f"Self-heal no-op patch restore fatal: {_noop_restore.fatal_error}")
-        sys.exit(1)
-    # === PERMANENT FIX (2026-09-19): rebuild Desktop bundle on the no-op path too.
-    # === A background `git reset --hard origin/main` that strips working-tree
-    # === patches without firing the post-merge hook, OR a stamp mismatch from a
-    # === stamp-less pre-rebase install, would otherwise leave the deployed bundle
-    # === stale even though `update` reports "Already up to date". Gate on
-    # === had_desktop_app_before_update (no rebuild when the user never installed
-    # === Desktop). try/except: never let a desktop build failure strand the no-op
-    # === path (the function's internal _desktop_build_needed stamp short-circuits
-    # === the actual rebuild when the source hash matches).
-    if had_desktop_app_before_update:
-        try:
-            _noop_desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
-            _noop_build_ok = _rebuild_desktop_after_update(
-                _noop_desktop_dir, had_desktop_app_before_update=had_desktop_app_before_update)
-            if not _noop_build_ok:
-                print("  ⚠Desktop rebuild skipped/failed on no-op path (continuing).")
-        except Exception as _noop_rebuild_err:
-            print(f"  ⚠Desktop rebuild error on no-op path (continuing): {_noop_rebuild_err}")
-    if not current_checkout_complete:
-        if gateway_mode:
-            _write_gateway_update_exit_code(False)
-        _finalize_receipt("partial", 'Update receipt finalize (current checkout) failed: %s')
-        sys.exit(1)
+    if completion_request is not None:
+        # Same code, same host obligation: an SHA-less arm would REPLACE the standing record
+        # (and its restarted proof), so a sibling profile's no-op update re-kills the multiplexer.
+        completion_request["expected_sha"] = _capture_head_sha(git_cmd, _m().PROJECT_ROOT) or ""
+        completion_request["completion_message"] = (
+            "✓ Already up to date!" if _plan.upstream_checked
+            else "✓ Up to date with your fork (official repo not checked).")
+    _complete_source_update(completion_request)
 
 
 def _apply_pulled_update(
     git_cmd, branch, pre_pull_sha, _plan, *, _windows_gateway_resume, completion_request: dict) -> None:
-    """Post-pull phase: verify HEAD, sync Python/Node/web/Desktop, maintenance, fleet restart."""
+    """Post-pull phase: verify HEAD, then hand the rest of the run to the completion child.
+
+    ``_complete_source_update`` spawns a fresh interpreter on the pulled tree
+    (``update_completion.run_completion``), so the dependency sync, bytecode sweep, Desktop
+    rebuild, fleet restart and G3 verify all run on the NEW code. This function never returns
+    on the success path: the child owns the receipt and this process only relays its exit code.
+    """
     post_pull_sha = _verify_head_after_pull(
         git_cmd, branch, _plan.pre_sync_sha or pre_pull_sha, in_place_update=_plan.in_place_update,
         _windows_gateway_resume=_windows_gateway_resume)
 
-    # Gateways still serve pre-pull modules until the restart phase; an interrupt before a
-    # completed restart leaves this marker so the next update catches up even when git is
-    # current. Distinct from ``.update-incomplete`` (venv/install repair).
-    # See #95294.
-    _write_fleet_restart_pending_marker(
-        expected_sha=post_pull_sha or "",
-        runtimes=_pre_update_plan.to_dict().get("runtimes") if _pre_update_plan is not None else None,
-    )
-    # Stale .pyc would ImportError on gateway restart when new source references new names.
-    _sweep_bytecode_after_update(branch)
-
-    _hand_off_post_swap(
-        args, swap="git", branch=branch, pre_pull_sha=pre_pull_sha, is_fork=is_fork, opts=opts,
-        gateway_mode=gateway_mode, had_desktop_app_before_update=had_desktop_app_before_update,
-        pre_update_snapshot_id=pre_update_snapshot_id, _pre_update_plan=_pre_update_plan,
-        _windows_gateway_resume=_windows_gateway_resume)
-
-
-# ``store_true`` update flags the post-swap child must see exactly as the user passed them.
-_POST_SWAP_FORWARDED_FLAGS = (
-    ("gateway", "--gateway"), ("no_backup", "--no-backup"), ("backup", "--backup"),
-    ("yes", "--yes"), ("keep_stash", "--keep-stash"), ("switch_branch", "--switch-branch"),
-    ("force", "--force"), ("force_venv", "--force-venv"),
-    ("no_gateway_restart", "--no-gateway-restart"),
-)
-
-
-def _post_swap_argv_tail(args) -> list[str]:
-    tail = [flag for attr, flag in _POST_SWAP_FORWARDED_FLAGS if getattr(args, attr, False)]
-    branch = getattr(args, "branch", None)
-    if branch:
-        tail += ["--branch", str(branch)]
-    return tail
-
-
-def _post_swap_payload(
-    *, swap: str, branch: str, opts, gateway_mode: bool, had_desktop_app_before_update: bool,
-    pre_pull_sha=None, is_fork: bool = False, pre_update_snapshot_id=None, _pre_update_plan=None,
-    _windows_gateway_resume=None) -> dict:
-    """Everything the post-swap tail needs that only the pre-swap process could observe: the
-    open receipt (detached here — the child resumes it), the pre-update fleet plan, the
-    pre-update version and active features, the Windows pause token. Flags cross as argv."""
-    from hermes_cli.update_receipt import detach_update_receipt
-
-    return {
-        "swap": swap, "branch": branch, "pre_pull_sha": pre_pull_sha, "is_fork": bool(is_fork),
-        "gateway_mode": bool(gateway_mode),
-        "had_desktop_app_before_update": bool(had_desktop_app_before_update),
-        "pre_update_snapshot_id": pre_update_snapshot_id,
-        "pre_update_version": opts.pre_update_version,
-        "active_lazy_features": opts.active_lazy_features,
-        "active_tool_dependencies": opts.active_tool_dependencies,
-        "plan": _pre_update_plan.to_dict() if _pre_update_plan is not None else None,
-        "windows_gateway_resume": _windows_gateway_resume,
-        # {profile: snapshot_id} from the pre-update backup; the post-migration safety nets for
-        # sibling profiles read it (update_cmd_config._LAST_SIBLING_SNAPSHOTS).
-        "sibling_snapshots": dict(_sibling_snapshots_module()._LAST_SIBLING_SNAPSHOTS),
-        "receipt": detach_update_receipt(),
-    }
-
-
-def _sibling_snapshots_module():
-    # The backup phase REBINDS ``update_cmd_config._LAST_SIBLING_SNAPSHOTS``; read the module
-    # attribute at call time, never this module's import-time copy of the empty dict.
-    import hermes_cli.update_cmd_config as _cfg
-    return _cfg
-
-
-def _hand_off_post_swap(args, **payload_kwargs) -> None:
-    """Re-execute ``hermes update --post-swap`` on the pulled tree and exit with its code.
-
-    The parent detaches from the receipt and its Windows resume hook — the child owns both —
-    and only relays the exit code (``hermes_cli/update_handoff.py``).
-    """
-    from hermes_cli.update_handoff import continue_update_in_fresh_interpreter
-    from hermes_cli.update_receipt import resume_update_receipt
-
-    payload = _post_swap_payload(**payload_kwargs)
-    code = continue_update_in_fresh_interpreter(payload, argv_tail=_post_swap_argv_tail(args))
-    token = payload_kwargs.get("_windows_gateway_resume")
-    if token and code is not None:
-        # The child got its own copy (serialized before this flip) and owns the resume; every
-        # parent-side hook (atexit, the ZIP path's ``finally``) reads this flag and stays out
-        # of the way. When no child ran, the parent still resumes what it paused.
-        token["resume_needed"] = False
-    if code is None:
-        # No child ran: take the receipt back so this failure is recorded, and leave the
-        # install breadcrumb so the next launch finishes the dependency sync (new code, old deps).
-        if payload["receipt"]:
-            resume_update_receipt(payload["receipt"])
-        _record_update_step("post_swap_handoff", False, "child interpreter could not start")
-        _m()._write_update_incomplete_marker()
-        if payload_kwargs.get("gateway_mode"):
-            _write_gateway_update_exit_code(False)
-        code = 1
-    sys.exit(code)
-
-
-def _run_post_swap_phase(args, gateway_mode: bool) -> None:
-    """Child half of the update (``--post-swap``): resume the receipt and finish the run on the
-    pulled code."""
-    from hermes_cli.update_handoff import read_handoff
-    from hermes_cli.update_receipt import resume_update_receipt
-
-    payload = read_handoff(args.post_swap)
-    with suppress(OSError):
-        Path(args.post_swap).unlink()
-    if payload.get("receipt"):
-        resume_update_receipt(payload["receipt"])
-    _execute_post_swap(payload, args, gateway_mode)
-
-
-def _execute_post_swap(payload: dict, args, gateway_mode: bool) -> None:
-    """The tail ``_apply_pulled_update`` / ``_update_via_zip`` used to run in the pre-pull
-    interpreter, driven from a hand-off payload."""
-    from dataclasses import replace as _replace
-    import hermes_cli.update_cmd_config as _cfg
-    from hermes_cli.update_inventory import UpdatePlan
-
-    _cfg._LAST_SIBLING_SNAPSHOTS = dict(payload.get("sibling_snapshots") or {})
-    _pre_update_plan = UpdatePlan.from_dict(payload["plan"]) if payload.get("plan") else None
-    _windows_gateway_resume = payload.get("windows_gateway_resume")
-    if _windows_gateway_resume:
-        import atexit as _atexit
-        _atexit.register(_m()._resume_windows_gateways_after_update, _windows_gateway_resume)
-    # Flags and config resolve here exactly as they did pre-swap; the three pre-update
-    # snapshots come from the payload (the new tree would report the NEW version).
-    opts = _replace(
-        _resolve_update_options(args, gateway_mode),
-        pre_update_version=payload.get("pre_update_version"),
-        active_lazy_features=payload.get("active_lazy_features"),
-        active_tool_dependencies=payload.get("active_tool_dependencies"))
-    had_desktop_app_before_update = bool(payload.get("had_desktop_app_before_update"))
-    desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
-
-    try:
-        if payload.get("swap") == "zip":
-            desktop_build_ok = _finish_zip_update(
-                active_tool_dependencies=opts.active_tool_dependencies,
-                pre_update_version=opts.pre_update_version,
-                had_desktop_app_before_update=had_desktop_app_before_update,
-                _windows_gateway_resume=_windows_gateway_resume)
-            if gateway_mode:
-                _write_gateway_update_exit_code(desktop_build_ok)
-            return
-        # The parent already ran the checkout preflight (fork banner, lockfile churn, EOL); the
-        # child only needs a working git.
-        git_cmd = _ensure_non_trampoline_git(_base_git_cmd())
-        _finish_pulled_update(
-            git_cmd, payload["branch"], payload.get("pre_pull_sha"), opts, gateway_mode=gateway_mode,
-            is_fork=bool(payload.get("is_fork")), desktop_dir=desktop_dir,
-            had_desktop_app_before_update=had_desktop_app_before_update,
-            pre_update_snapshot_id=payload.get("pre_update_snapshot_id"),
-            _pre_update_plan=_pre_update_plan, _windows_gateway_resume=_windows_gateway_resume)
-    except _shim_quarantine_error_type() as e:
-        _refuse_update_for_contended_shims(e)
-    except subprocess.CalledProcessError as e:
-        _handle_update_called_process_error(
-            e, args, gateway_mode, had_desktop_app_before_update,
-            _windows_gateway_resume=_windows_gateway_resume)
-
-
-def _finish_pulled_update(
-    git_cmd, branch, pre_pull_sha, opts, *, gateway_mode, is_fork, desktop_dir,
-    had_desktop_app_before_update, pre_update_snapshot_id, _pre_update_plan,
-    _windows_gateway_resume) -> None:
-    """Post-swap tail (git path): sync Python/Node/web/Desktop, maintenance, fleet restart."""
-    if is_fork and branch == "main":
-        _m()._sync_with_upstream_if_needed(
-            git_cmd, _m().PROJECT_ROOT, assume_yes=opts.assume_yes, input_fn=opts.gw_input_fn)
-
-    # === PERMANENT FIX (2026-09-15): in-process patch restore MUST run BEFORE
-    # === _sync_python_dependencies_after_pull (which is the dep-sync that
-    # === can probe _desktop_app_present) AND before _rebuild_desktop_after_update
-    # === (which rebuilds the Desktop bundle). F1 ordering invariant: the bundle
-    # === must be built from PATCHED source, not from the upstream reset.
-    # === restore_patches() is idempotent — second invocation is a no-op for
-    # === any patch already on disk. Bundle-affecting patches set
-    # === bundle_rebuild_required=True so the rebuild below fires.
-    _restore_result = restore_patches(project_root=_m().PROJECT_ROOT)
-    for _name in _restore_result.patches_applied:
-        print(f"  ✓ patch verified in place: {_name}")
-    for _name, _reason in _restore_result.patches_drifted:
-        print(f"  ⚠ patch drifted (needs regen): {_name} — {_reason}")
-    for _name, _marker in _restore_result.patches_with_marker_fail:
-        print(f"  ✗ patch marker missing (regression): {_name} — {_marker!r}")
-    if _restore_result.fatal_error or _restore_result.patches_with_marker_fail:
-        _finalize_receipt("partial", f"Self-heal patch restore fatal: {_restore_result.fatal_error}")
-        sys.exit(1)
-
-    # .[all], falling back to base + extras individually so one broken extra doesn't strip
-    # the rest; the ownership preflight refuses first on foreign-owned (sudo-pip) venv files.
-    _sync_python_dependencies_after_pull(
-        git_cmd, branch, pre_pull_sha, active_lazy_features=opts.active_lazy_features,
-        active_tool_dependencies=opts.active_tool_dependencies,
-        _windows_gateway_resume=_windows_gateway_resume)
-
-    node_failures = _update_node_dependencies()
-    _m()._build_web_ui(_m().PROJECT_ROOT / "web")
-    desktop_build_ok = _rebuild_desktop_after_update(
-        desktop_dir, had_desktop_app_before_update=had_desktop_app_before_update)
-
-    print()
-    print(f"✓ Code updated!{_branch_head_suffix(git_cmd, _m().PROJECT_ROOT)}")
-
-    update_complete = _run_post_update_maintenance(
-        assume_yes=opts.assume_yes, gateway_mode=gateway_mode,
-        pre_update_snapshot_id=pre_update_snapshot_id,
-        had_desktop_app_before_update=had_desktop_app_before_update,
-        node_failures=node_failures, desktop_build_ok=desktop_build_ok,
-        pre_update_version=opts.pre_update_version)
-
-    # Exit code *before* the restart: under --gateway this process lives in the gateway's
-    # systemd cgroup and the systemctl-restart fallback SIGKILLs it (KillMode=mixed), so
-    # the marker would never land and the new gateway's watcher would time out spuriously.
-    if gateway_mode:
-        _write_gateway_update_exit_code(update_complete)
-
-    if opts.no_gateway_restart:
-        # Cron inside the gateway's own cgroup: restarting the fleet now would
-        # SIGUSR1-drain this updater's own gateway and systemd would SIGKILL the
-        # updater with it. Defer instead — the pending marker written above is
-        # kept for the next normal update. Skipping the restart phase also skips
-        # its stale-module purge: this live interpreter still serves pre-update
-        # code and must not have its sys.modules graph mutated mid-flight.
-        # Windows pause/resume still runs (paused gateways must be resumed onto
-        # pre-update code); only the fleet restart + verification are deferred.
-        # The resume outcome is RETAINED (not discarded): a failed resume must
-        # still make this update partial, exactly as on the normal path.
-        resume_outcome = _GatewayRestartOutcome(
-            incomplete=False, phase_errors=[], pre_restart_gateway_pids=[],
-            restarted_services=[], failed_or_stale_units=[], relaunched_profiles=[],
-            externally_supervised_profiles=[], killed_pids=set(),
-        )
-        _resume_windows_gateways_and_merge_outcome(
-            resume_outcome, _windows_gateway_resume, gateway_mode)
-        _defer_fleet_restart_after_update(
-            update_complete=update_complete, resume_incomplete=resume_outcome.incomplete)
-        return
-
-    _restart = _restart_gateway_fleet_after_update(_pre_update_plan, gateway_mode)
-    _resume_windows_gateways_and_merge_outcome(_restart, _windows_gateway_resume, gateway_mode)
-    _verify_fleet_after_update(
-        _restart, _pre_update_plan=_pre_update_plan, _windows_gateway_resume=_windows_gateway_resume,
-        node_failures=node_failures, update_complete=update_complete)
+    if completion_request is not None:
+        observed = _capture_head_sha(git_cmd, _m().PROJECT_ROOT) or post_pull_sha
+        pinned = completion_request.get("expected_sha")
+        if pinned is not None and observed != pinned:
+            print("✗ Checkout no longer matches the selected channel commit. No completion was applied.")
+            _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+            sys.exit(1)
+        completion_request["expected_sha"] = pinned or observed
+    _complete_source_update(completion_request)
 
 
 def _cmd_update_impl(args, gateway_mode: bool):
@@ -1692,13 +1412,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
     _record_update_step("pre_state_capture", _verify_pre_state is not None,
                         "" if _verify_pre_state is not None else "pre-state capture failed")
 
-    # A legacy re-exec child resumes exactly the fleet its parent stopped; re-running discovery
-    # here found the parent's just-relaunched gateway and force-killed it (#101600).
-    _windows_gateway_resume = adopt_handed_off_gateway_resume() or _m()._pause_windows_gateways_for_update()
+    # The completion child (``update_completion.run_completion``) never re-enters this
+    # function — it resumes the fleet this process stopped from the request payload it was
+    # handed — so pausing here always describes exactly the gateways this process stopped,
+    # and the atexit hook below resumes precisely that set.
+    _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
     if _windows_gateway_resume:
         import atexit as _atexit
         _atexit.register(_m()._resume_windows_gateways_after_update, _windows_gateway_resume)
-
 
     desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
     # An installed Hermes.app only this update refreshes counts even with no release/ build
@@ -1872,20 +1593,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
         _apply_pulled_update(
             git_cmd, branch, pre_pull_sha, _plan,
             _windows_gateway_resume=_windows_gateway_resume, completion_request=completion_request)
-
-        # G3 guard rail (spec §5.1 Post-verify) seats in the COMPLETION CHILD
-        # (update_completion._verify_after_relaunch), between that child's gateway
-        # relaunch and its receipt finalize: the child resumes the paused gateway and
-        # still holds an open receipt, whereas this parent's receipt is popped as soon
-        # as the child returns. Reaching verify_or_rollback from here still records it
-        # (run 4), but only the child can record it into the file the child writes last.
-        # Fall back to the parent seat only for completion paths that never get one.
-        if _verify_pre_state is not None and not completion_request.get("verify_pre_state"):
-            from hermes_cli.update_verification import verify_or_rollback
-            _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
-            if verify_or_rollback(_verify_pre_state, checkout=_repo_root_for_verification()):
-                _finalize_receipt("failed", "post-update verification failed")
-                sys.exit(1)
     except subprocess.CalledProcessError as e:
         try:
             _handle_update_called_process_error(
