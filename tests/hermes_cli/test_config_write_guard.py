@@ -5,6 +5,7 @@ full-replace save (``mcp_servers`` is not in DEFAULT_CONFIG and leaf-path
 preservation could not protect the node). Spec:
 docs/superpowers/specs/2026-09-25-hermes-guard-rails-design.md §3.
 """
+import copy
 import logging
 
 import pytest
@@ -14,6 +15,7 @@ from hermes_cli.config import (
     DEFAULT_CONFIG,
     ConfigWriteGuardError,
     _explicit_config_paths,
+    atomic_config_write,
     load_config,
     read_raw_config,
     save_config,
@@ -145,18 +147,113 @@ class TestMigrationGuardIsHard:
         assert not [r for r in caplog.records if "mcp_servers" in r.message]
 
 
+class TestAtomicConfigWriteIsGuarded:
+    """The G1 guard must sit at the chokepoint, not only in ``save_config``.
+
+    Regression: the guard was ``save_config``-local, so the ~17 production writers
+    that call ``atomic_config_write`` directly (``hermes login``, ``doctor_config``,
+    ``credential_lifecycle``, the Telegram adapter, gateway slash commands, …)
+    still dropped an omitted user-data key — the exact 2026-09-24 ``mcp_servers``
+    loss, one layer down.
+    """
+
+    INCOMING = {"custom_providers": {"ark": {"base_url": "https://ark.example"}}}
+
+    def _raw(self, home):
+        return yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+
+    def test_direct_write_omitting_mcp_servers_is_represerved(self, seeded_home, caplog):
+        with caplog.at_level(logging.WARNING, logger="hermes_cli.config"):
+            atomic_config_write(seeded_home / "config.yaml", self.INCOMING)
+
+        raw = self._raw(seeded_home)
+        assert set(raw["mcp_servers"]) == set(SEED_CONFIG["mcp_servers"])
+        assert any("mcp_servers" in record.message for record in caplog.records)
+
+    def test_direct_write_honours_removed_keys(self, seeded_home, caplog):
+        with caplog.at_level(logging.WARNING, logger="hermes_cli.config"):
+            atomic_config_write(seeded_home / "config.yaml", self.INCOMING,
+                                removed_keys={"mcp_servers"})
+
+        assert "mcp_servers" not in self._raw(seeded_home)
+        assert not [r for r in caplog.records if "mcp_servers" in r.message]
+
+    def test_direct_write_to_a_fresh_path_writes_exactly_the_data(self, tmp_path):
+        """Nothing on disk → nothing to protect, and no guard noise."""
+        target = tmp_path / "config.yaml"
+        atomic_config_write(target, self.INCOMING)
+        assert set(self._raw(tmp_path)) == set(self.INCOMING)
+
+    def test_direct_write_does_not_mutate_the_caller_dict(self, seeded_home):
+        incoming = copy.deepcopy(self.INCOMING)
+        atomic_config_write(seeded_home / "config.yaml", incoming)
+        assert incoming == self.INCOMING
+
+    def test_post_write_invariant_covers_direct_writers(self, seeded_home, monkeypatch):
+        """A drop below the chokepoint must raise and restore pre-write bytes."""
+        import utils
+
+        real_save = utils.atomic_roundtrip_yaml_save
+
+        def tampering_save(path, data, **kwargs):
+            real_save(path, {k: v for k, v in data.items() if k != "mcp_servers"}, **kwargs)
+
+        monkeypatch.setattr(utils, "atomic_roundtrip_yaml_save", tampering_save)
+        before = (seeded_home / "config.yaml").read_bytes()
+
+        with pytest.raises(ConfigWriteGuardError) as excinfo:
+            atomic_config_write(seeded_home / "config.yaml", self.INCOMING)
+
+        assert "mcp_servers" in str(excinfo.value)
+        assert (seeded_home / "config.yaml").read_bytes() == before
+
+
+class TestUnsetStillRemoves:
+    """``hermes config unset`` is a deliberate drop — the guard must not undo it.
+
+    Regression risk introduced by moving the G1 guard into ``atomic_config_write``:
+    an unset that pops a whole root section looks identical to a partial writer that
+    forgot the section, so the guard would re-preserve it and the unset would silently
+    no-op. The explicit ``removed_keys`` pass-through is what keeps ``config unset``
+    working.
+    """
+
+    def test_unset_of_a_nested_key_keeps_the_rest_of_the_section(self, seeded_home, capsys):
+        from hermes_cli.config import unset_config_value
+
+        unset_config_value("mcp_servers.github")
+        capsys.readouterr()
+
+        raw = read_raw_config()
+        assert set(raw["mcp_servers"]) == {"chrome-devtools"}
+        assert "custom_providers" in raw
+
+    def test_unset_of_a_whole_root_section_removes_it(self, seeded_home, capsys):
+        from hermes_cli.config import unset_config_value
+
+        unset_config_value("mcp_servers")
+        capsys.readouterr()
+
+        raw = read_raw_config()
+        assert "mcp_servers" not in raw
+        assert "custom_providers" in raw
+
+
 class TestPostWriteInvariant:
     def test_tampered_write_raises_and_restores_pre_write_bytes(self, seeded_home, monkeypatch):
-        import hermes_cli.config as config_module
+        # The guard now lives at the ``atomic_config_write`` chokepoint, so the
+        # injection point for "any layer below drops the key" moved one layer
+        # down to ``utils.atomic_roundtrip_yaml_save``.
+        import utils
 
-        real_write = config_module.atomic_config_write
+        real_save = utils.atomic_roundtrip_yaml_save
 
-        def tampering_write(path, normalized, **kwargs):
-            # Simulate ANY layer below save_config dropping the key (the exact
+        def tampering_save(path, data, **kwargs):
+            # Simulate ANY layer below the chokepoint dropping the key (the exact
             # class of loss the guard exists to catch).
-            real_write(path, {k: v for k, v in normalized.items() if k != "mcp_servers"}, **kwargs)
+            real_save(path, {k: v for k, v in data.items() if k != "mcp_servers"}, **kwargs)
 
-        monkeypatch.setattr(config_module, "atomic_config_write", tampering_write)
+        monkeypatch.setattr(utils, "atomic_roundtrip_yaml_save", tampering_save)
         before = (seeded_home / "config.yaml").read_bytes()
 
         with pytest.raises(ConfigWriteGuardError) as excinfo:
