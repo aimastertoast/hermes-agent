@@ -1134,13 +1134,13 @@ export interface Translations {
     about: {
       updates: string
       /** Renderer-side toggles for the orchestrator's update modes (task 9
-       *  atoms: $updateSafeModeAuto, $updateForceModeLocal). */
+       *  atoms: $updateSafeModeAuto, $updateAllowLocalAhead). */
       updateModes: {
         title: string
         safeModeAutoLabel: string
         safeModeAutoDescription: string
-        forceModeLocalLabel: string
-        forceModeLocalDescription: string
+        allowLocalAheadLabel: string
+        allowLocalAheadDescription: string
       }
     }
     config: {

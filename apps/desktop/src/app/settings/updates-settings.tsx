@@ -3,7 +3,7 @@ import { type ReactElement, useContext } from 'react'
 
 import { useI18n } from '@/i18n'
 import { SlidersHorizontal } from '@/lib/icons'
-import { $updateForceModeLocal, $updateSafeModeAuto } from '@/store/updates'
+import { $updateAllowLocalAhead, $updateSafeModeAuto } from '@/store/updates'
 
 import { SectionHeading, SettingsBreadcrumbContext, ToggleRow } from './primitives'
 
@@ -16,7 +16,7 @@ export function UpdatesSettings(): ReactElement {
   const { t } = useI18n()
   const u = t.settings.about.updateModes
   const safeModeAuto = useStore($updateSafeModeAuto)
-  const forceModeLocal = useStore($updateForceModeLocal)
+  const allowLocalAhead = useStore($updateAllowLocalAhead)
 
   return (
     <section aria-labelledby="updates-settings-heading" className={hasBreadcrumb ? undefined : 'mt-8'}>
@@ -33,11 +33,11 @@ export function UpdatesSettings(): ReactElement {
           onChange={next => $updateSafeModeAuto.set(next)}
         />
         <ToggleRow
-          checked={forceModeLocal}
-          description={u.forceModeLocalDescription}
-          id="update-force-mode-local"
-          label={u.forceModeLocalLabel}
-          onChange={next => $updateForceModeLocal.set(next)}
+          checked={allowLocalAhead}
+          description={u.allowLocalAheadDescription}
+          id="update-allow-local-ahead"
+          label={u.allowLocalAheadLabel}
+          onChange={next => $updateAllowLocalAhead.set(next)}
         />
       </div>
     </section>

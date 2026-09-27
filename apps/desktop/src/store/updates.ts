@@ -72,10 +72,23 @@ export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
  *  every invoke. */
 export const $updateSafeModeAuto = persistentAtom<boolean>('hermes.update.safeModeAuto', false, Codecs.bool)
 
-/** When true, force the apply to target the LOCAL checkout (the machine
- *  running the GUI) instead of the active remote backend. Useful when the
- *  remote registry misroutes an apply at the wrong machine. Default off. */
-export const $updateForceModeLocal = persistentAtom<boolean>('hermes.update.forceModeLocal', false, Codecs.bool)
+/** When true, force the update to proceed past the
+ *  ``LOCAL_AHEAD_REFUSAL`` gate (the user's local checkout has commits that
+ *  have not been pushed to the active channel's origin). The orchestrator's
+ *  force-requirement gate (``evaluate_update_force_requirement``) consults
+ *  this toggle on every invoke and only blocks the user on
+ *  ``local-ahead`` / ``force-pushed`` states when the toggle is OFF.
+ *
+ *  The setting was previously named ``$updateForceModeLocal``, which
+ *  described a DIFFERENT feature (force the apply to target the local
+ *  checkout instead of an active remote backend) that was never wired up.
+ *  Renamed to reflect the actual semantic: it arms the local-ahead bypass
+ *  documented in ``update_contract.LOCAL_AHEAD_REFUSAL`` and surfaced as
+ *  the "Allow Update Now when local is ahead" toggle in
+ *  ``UpdatesSettings``. Default off: the user must opt in once per install.
+ *  Persisted — the orchestrator reads it on every invoke.
+ */
+export const $updateAllowLocalAhead = persistentAtom<boolean>('hermes.update.allowLocalAhead', false, Codecs.bool)
 
 /** The most recent durable receipt the renderer has loaded. Null when none
  *  exists yet or after the user acknowledges it. NOT persisted — the

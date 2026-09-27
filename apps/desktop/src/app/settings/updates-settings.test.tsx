@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { $updateForceModeLocal, $updateSafeModeAuto } from '@/store/updates'
+import { $updateAllowLocalAhead, $updateSafeModeAuto } from '@/store/updates'
 
 import { UpdatesSettings } from './updates-settings'
 
@@ -52,7 +52,7 @@ function createMockAtom<T>(initial: T): MockAtom<T> {
 
 const atoms = vi.hoisted(() => ({
   $mockSafeMode: createMockAtom(false),
-  $mockForceLocal: createMockAtom(false)
+  $mockAllowLocalAhead: createMockAtom(false)
 }))
 
 vi.mock('@/store/updates', async (): Promise<Record<string, unknown>> => {
@@ -61,7 +61,7 @@ vi.mock('@/store/updates', async (): Promise<Record<string, unknown>> => {
   return {
     ...actual,
     $updateSafeModeAuto: atoms.$mockSafeMode,
-    $updateForceModeLocal: atoms.$mockForceLocal
+    $updateAllowLocalAhead: atoms.$mockAllowLocalAhead
   }
 })
 
@@ -69,7 +69,7 @@ describe('UpdatesSettings', (): void => {
   afterEach((): void => {
     cleanup()
     atoms.$mockSafeMode.set(false)
-    atoms.$mockForceLocal.set(false)
+    atoms.$mockAllowLocalAhead.set(false)
   })
 
   it('renders both update-mode toggles with the persisted labels', (): void => {
@@ -79,19 +79,19 @@ describe('UpdatesSettings', (): void => {
     expect(screen.getByRole('switch', { name: 'Auto-apply safe updates' })).toBeTruthy()
     expect(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })).toBeTruthy()
     expect($updateSafeModeAuto.get()).toBe(false)
-    expect($updateForceModeLocal.get()).toBe(false)
+    expect($updateAllowLocalAhead.get()).toBe(false)
   })
 
   it('reflects the atom value so a non-default initial state renders checked', (): void => {
     atoms.$mockSafeMode.set(true)
-    atoms.$mockForceLocal.set(false)
+    atoms.$mockAllowLocalAhead.set(false)
     render(<UpdatesSettings />)
 
     const safe = screen.getByRole('switch', { name: 'Auto-apply safe updates' })
-    const force = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
+    const allowAhead = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
 
     expect(safe.getAttribute('aria-checked')).toBe('true')
-    expect(force.getAttribute('aria-checked')).toBe('false')
+    expect(allowAhead.getAttribute('aria-checked')).toBe('false')
   })
 
   it('clicking the safe-mode toggle flips the atom value', (): void => {
@@ -111,13 +111,13 @@ describe('UpdatesSettings', (): void => {
     expect(safe.getAttribute('aria-checked')).toBe('false')
   })
 
-  it('clicking the force-mode toggle flips its atom value without touching the other', (): void => {
+  it('clicking the allow-local-ahead toggle flips its atom value without touching the other', (): void => {
     render(<UpdatesSettings />)
 
-    const force = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
-    fireEvent.click(force)
+    const allowAhead = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
+    fireEvent.click(allowAhead)
 
-    expect($updateForceModeLocal.get()).toBe(true)
+    expect($updateAllowLocalAhead.get()).toBe(true)
     expect($updateSafeModeAuto.get()).toBe(false)
   })
 

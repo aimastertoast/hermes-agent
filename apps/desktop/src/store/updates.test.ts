@@ -118,7 +118,7 @@ const {
   stopUpdatePoller,
   $updateStatus,
   $updateSafeModeAuto,
-  $updateForceModeLocal,
+  $updateAllowLocalAhead,
   $lastReceipt,
   $lastReceiptAcknowledged,
   BACKGROUND_UPDATE_CHECK_MS
@@ -1823,7 +1823,7 @@ describe('updates settings atoms', () => {
     // each atom explicitly so a previous test's set() can't poison the
     // default-value assertions below.
     $updateSafeModeAuto.set(false)
-    $updateForceModeLocal.set(false)
+    $updateAllowLocalAhead.set(false)
     $lastReceipt.set(null)
     $lastReceiptAcknowledged.set(true)
   })
@@ -1832,8 +1832,8 @@ describe('updates settings atoms', () => {
     expect($updateSafeModeAuto.get()).toBe(false)
   })
 
-  it('$updateForceModeLocal defaults to false', () => {
-    expect($updateForceModeLocal.get()).toBe(false)
+  it('$updateAllowLocalAhead defaults to false', () => {
+    expect($updateAllowLocalAhead.get()).toBe(false)
   })
 
   it('$lastReceipt defaults to null', () => {
@@ -1853,10 +1853,10 @@ describe('updates settings atoms', () => {
     expect(storage.get('hermes.update.safeModeAuto')).toBe('true')
   })
 
-  it('setting $updateForceModeLocal persists', () => {
-    $updateForceModeLocal.set(true)
-    expect($updateForceModeLocal.get()).toBe(true)
-    expect(storage.get('hermes.update.forceModeLocal')).toBe('true')
+  it('setting $updateAllowLocalAhead persists', () => {
+    $updateAllowLocalAhead.set(true)
+    expect($updateAllowLocalAhead.get()).toBe(true)
+    expect(storage.get('hermes.update.allowLocalAhead')).toBe('true')
   })
 
   it('flipping $updateSafeModeAuto back to false persists the cleared state', () => {
