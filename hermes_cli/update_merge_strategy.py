@@ -29,15 +29,26 @@ class MergeResult:
         self.error_detail = error_detail
 
 
-def backup_branch(repo: Path, ts: int) -> str:
+def backup_branch(repo: Path, ts: int, channel: str = "main") -> str:
     """Create backup-<ts> if local has commits ahead of origin/<channel>.
+
+    The channel argument MUST match the channel the caller is about to merge
+    (see :func:`attempt_merge`): on a non-``main`` channel the orchestrator
+    pulls and merges ``origin/<channel>``, so the backup must count local
+    commits ahead of the SAME ref. A hard-coded ``origin/main`` here meant a
+    canary install whose local branch is at ``origin/main`` but ahead of
+    ``origin/canary`` would create a needless backup branch — and worse, an
+    install that IS ahead of ``origin/main`` but not ``origin/canary`` would
+    silently skip the backup right when the local-ahead protection is most
+    needed. Defaults to ``"main"`` so legacy callers (and tests that don't
+    care about channel scoping) keep their behavior.
 
     Returns branch name, or empty string if no local commits to back up.
     """
     branch_name = f"backup-{ts}"
-    # Check for local commits ahead of origin/main
+    # Check for local commits ahead of origin/<channel>
     ahead = subprocess.run(
-        ["git", "-C", str(repo), "rev-list", "--count", "origin/main..HEAD"],
+        ["git", "-C", str(repo), "rev-list", "--count", f"origin/{channel}..HEAD"],
         capture_output=True, text=True,
     )
     if ahead.returncode != 0 or int(ahead.stdout.strip() or "0") == 0:

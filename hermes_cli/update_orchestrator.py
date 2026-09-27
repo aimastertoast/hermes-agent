@@ -448,7 +448,7 @@ def run_update(
             steps.append({"name": "snapshot", "ok": True})
 
         # ---- Step 3: branch backup ----
-        backup_ref = backup_branch(repo, ts=int(time.time()))
+        backup_ref = backup_branch(repo, ts=int(time.time()), channel=channel)
         if not backup_ref:
             steps.append({"name": "branch_backup", "ok": True, "skipped": True})
         else:
