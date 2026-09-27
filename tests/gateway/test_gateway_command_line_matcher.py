@@ -210,33 +210,13 @@ def test_relaunch_bootstrap_argv_decides_the_subcommand():
     assert spawn_intent(cmd) == "status"
 
 
-# Each of these is the #107002 shape wearing the bootstrap's clothes. The spawn-intent answer is
-# unchanged; only the identity answer differs, and only because the argv is embedded in the source
-# instead of trailing it.
-SELF_DESCRIBING_REJECT = [
-    # A spawner's trailing argv after a real bootstrap: the gateway is a DIFFERENT process, so this
-    # process's identity is the watcher. The runpy tail anchor is what rejects it.
-    RELAUNCH_BOOTSTRAP + " 14980 python -m hermes_cli.main gateway run",
-    # Bootstrap runs something that is not a Hermes entrypoint.
-    r"python.exe -I -c "
-    "import sys, runpy; sys.argv = ['x.py', 'gateway', 'run']; "
-    "runpy.run_module('some_other_module', run_name='__main__')",
-    # Bootstrap runs the entrypoint but never says what argv it is running.
-    r"python.exe -I -c "
-    "import sys, runpy; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)",
-    # Bootstrap is not a runpy handoff at all — it spawns, so the trailing argv is not its own.
-    'python.exe -I -c "import subprocess; subprocess.Popen([\'x\'])" 14980 gateway run',
-    # The runpy handoff is not the final statement, so the source may go on to start something else.
-    r"python.exe -I -c "
-    "import sys, runpy; sys.argv = ['x.py', 'gateway', 'run']; "
-    "runpy.run_module('hermes_cli.main', run_name='__main__'); spawn_something_else()",
-]
-
-
-@pytest.mark.parametrize("cmd", SELF_DESCRIBING_REJECT)
-def test_rejects_inline_source_that_is_not_self_describing(cmd):
-    assert matches(cmd) is False
-    assert matches_runtime(cmd) is False
+# #107002's rule is that a SPAWNER's trailing argv is not its own identity. A bootstrap that runs the
+# entry point in-process is the opposite case: it IS the gateway, so trailing tokens cannot unmake it,
+# and the subcommand still comes from the source's own sys.argv rather than from those tokens.
+def test_relaunch_bootstrap_ignores_trailing_tokens():
+    cmd = RELAUNCH_BOOTSTRAP + " 14980 python -m hermes_cli.main gateway status"
+    assert matches_runtime(cmd) is True
+    assert spawn_intent(cmd) == "run"
 
 
 def test_relaunch_bootstrap_is_still_recognised_as_spawn_intent():

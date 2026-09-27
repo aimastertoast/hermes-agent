@@ -1,7 +1,6 @@
 """Gateway runtime status helpers: PID/lock/marker files under ``{HERMES_HOME}`` (one set per
 home/profile) that tell whether the gateway daemon is running."""
 
-import ast
 import asyncio
 import contextlib
 import copy
@@ -23,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional
 
 from hermes_constants import _get_platform_default_hermes_home, get_hermes_home, get_process_hermes_home
+from hermes_cli._subprocess_compat import pid_exists_stdlib
 from utils import atomic_json_write
 
 if sys.platform == "win32":
@@ -589,92 +589,75 @@ def command_line_runs_inline_source(tokens: list[str]) -> bool:
     return inline_source_flag_index(tokens) is not None
 
 
-# A bootstrap that ends by running a Hermes entrypoint as ``__main__`` — the shape
-# ``hermes_cli.venv_sync.relaunch_command`` builds when a venv whose ABI no longer matches the managed
-# generation hands off to the store interpreter. It runs the gateway IN this process.
-#
-# The call must be the LAST thing the source does: a command line that appends a spawner's trailing
-# argv to a real bootstrap (``… alter_sys=True) 14980 python -m hermes_cli.main gateway run``) is
-# that watcher, not a gateway, and anchoring on the closing paren is what tells them apart. Requiring
-# no ``;`` before it also rejects a source that runs the entrypoint and then goes on to start
-# something else. Both are #107002 wearing the bootstrap's clothes.
-_INLINE_HERMES_RUNPY_TAIL_RE = re.compile(
-    r"runpy\.run_(?:module|path)\([^;]*?\)\s*\Z", re.DOTALL
+# Hermes' own inline bootstraps hand control to a Hermes entry point IN this process, so the argv
+# they run with is this process's own identity; every other ``-c`` program keeps its trailing argv
+# as data (#107002). Each pattern is one emitted source shape, anchored at both ends so a program
+# merely CARRYING a bootstrap command line (the restart watcher's respawn argv) never matches.
+_Q = r"""['"]?"""
+_MAIN = rf"{_Q}__main__{_Q}"
+_RUN_MODULE = rf"runpy\.run_module\(\s*{_Q}(?P<target>[\w.]+){_Q}\s*,\s*run_name\s*=\s*{_MAIN}\s*,\s*alter_sys\s*=\s*True\s*\)"
+_BOOTSTRAPS = (
+    # hermes_cli._launchers.runtime_command (store launcher, the Windows updater's relaunch)
+    ("module", re.compile(rf"import os, sys, runpy;.*\b{_RUN_MODULE}", re.S)),
+    # hermes_cli.venv_sync.relaunch_command: argv is assigned inside the source
+    ("module", re.compile(rf"import sys, runpy; sys\.path\.insert\(.*\b{_RUN_MODULE}", re.S)),
+    ("path", re.compile(
+        rf"import sys, runpy; sys\.path\.insert\(.*\brunpy\.run_path\(\s*{_Q}(?P<target>[^'\"]+?){_Q}\s*,\s*run_name\s*=\s*{_MAIN}\s*\)",
+        re.S)),
+    # hermes_cli._launchers._launcher_script (the published POSIX shell / Windows .cmd launcher)
+    ("entry", re.compile(r"import os, re, sys\s.*\bfrom\s+(?P<target>[\w.]+)\s+import\s+(?P<func>\w+)\b.*\bsys\.exit\(\s*(?P=func)\(\)\s*\)", re.S)),
+    # hermes_cli._launchers._write_cmd_launcher: the launcher script, base64-encoded
+    ("base64", re.compile(rf"import base64; exec\(base64\.b64decode\({_Q}(?P<target>[A-Za-z0-9+/=]+){_Q}\)\)")),
 )
-_SYS_ARGV_ASSIGNMENT_RE = re.compile(r"\bsys\.argv\s*=\s*\[")
+_ASSIGNED_ARGV = re.compile(r"\bsys\.argv\s*=\s*\[(.*?)\]\s*;")
 
 
-def _inline_source_runs_hermes_entrypoint_in_process(source: str) -> bool:
-    """True when *source* finishes by running a Hermes entrypoint as ``__main__`` in this process."""
-    tail = _INLINE_HERMES_RUNPY_TAIL_RE.search(source)
-    if tail is None:
-        return False
-    target = re.search(r"run_(?:module|path)\(\s*(['\"][^'\"]+['\"])", tail.group(0))
-    if target is None:
-        return False
-    # The literal is repr-escaped, so its separators are DOUBLED backslashes; collapse them or
-    # ``hermes_cli\\main.py`` normalizes to ``hermes_cli//main.py`` and matches no entrypoint.
-    normalized = re.sub(r"/+", "/", target.group(1).strip("\"'").replace("\\", "/"))
-    return "hermes_cli.main" in normalized or "hermes_cli/main.py" in normalized
-
-
-def _sys_argv_literal_from_source(source: str) -> str | None:
-    """The balanced list literal a bootstrap assigns to ``sys.argv``, or None.
-
-    Brackets are matched by scanning rather than by regex, because a home path may itself contain
-    one; the literal is only ever parsed with ``ast.literal_eval``, never evaluated.
-    """
-    match = _SYS_ARGV_ASSIGNMENT_RE.search(source)
+def _bootstrap_entry(source: str, argv: list[str]) -> list[str] | None:
+    """``[-m, <module>, *argv]`` (or ``[<path>, *argv]``) the inline *source* runs in-process, else None."""
+    source = source.strip()
+    kind, match = next(((k, m) for k, p in _BOOTSTRAPS if (m := p.fullmatch(source))), (None, None))
     if match is None:
         return None
-    start = match.end() - 1
-    depth = 0
-    quote = ""
-    for index in range(start, len(source)):
-        char = source[index]
-        if quote:
-            if char == quote and source[index - 1] != "\\":
-                quote = ""
-        elif char in "'\"":
-            quote = char
-        elif char in "[(":
-            depth += 1
-        elif char in "])":
-            depth -= 1
-            if depth == 0:
-                return source[start:index + 1]
+    target = match["target"]
+    if kind == "base64":
+        import base64
+        import binascii
+        try:
+            return _bootstrap_entry(base64.b64decode(target, validate=True).decode("utf-8"), argv)
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+    if kind == "entry":  # the launcher script's own ``--run-module <module>`` switch
+        return ["-m", argv[1], *argv[2:]] if argv[:1] == ["--run-module"] and len(argv) > 1 else ["-m", target, *argv]
+    if assigned := _ASSIGNED_ARGV.search(source):
+        argv = [item.strip().strip("'\"") for item in assigned.group(1).split(",")][1:]
+    # The caller has already rewritten every separator to "/", and the source is a repr() literal, so
+    # a Windows path arrives with DOUBLED separators ("C://app//hermes_cli//main.py"). Collapsing them
+    # is what lets the entrypoint check below match "hermes_cli/main.py".
+    if kind == "path":
+        return [re.sub(r"/{2,}", "/", target), *(re.sub(r"/{2,}", "/", item) for item in argv)]
+    return ["-m", target, *argv]
+
+
+def inline_bootstrap_argv(tokens: list[str]) -> list[str] | None:
+    """*tokens* as the equivalent ``python -m <module> <argv…>`` when this interpreter's ``-c`` source
+    is a Hermes bootstrap running an entry point in-process; None for any other inline source.
+
+    Command lines usually arrive space-joined (``/proc``, psutil, ``ps``), which splits the source
+    across tokens; the shortest token run that ends in a recognised tail is the source, whatever
+    joined it, and the tokens after it are the entry point's argv.
+    """
+    index = inline_source_flag_index(tokens)
+    if index is None:
+        return None
+    for end in range(index + 1, len(tokens)):
+        if tokens[end].rstrip().endswith(")"):
+            entry = _bootstrap_entry(" ".join(tokens[index + 1 : end + 1]), tokens[end + 1 :])
+            if entry is not None:
+                return [tokens[0], *entry]
     return None
 
 
-def _self_describing_inline_gateway_subcommand(raw_tokens: list[str], flag_index: int) -> str | None:
-    """Subcommand of an inline source that describes its OWN identity, else None.
-
-    ``#107002`` refuses inline source because a *spawner*'s trailing argv belongs to the process it
-    starts later. A re-exec bootstrap is the mirror image and is safe to read: the argv is assigned
-    inside the source itself, so no borrowed argv can be mistaken for this process's identity.
-
-    The source is the LAST argument, so it is recovered by re-joining the tokens after ``-c`` — a
-    command line reaches us as a space-join of argv, which is lossy for a source containing spaces
-    but exactly invertible here. That also means "no trailing argv" cannot be counted separately:
-    a command line with a spawner's trailing argv reconstructs a source that does not END in the
-    runpy call, which the anchored tail check rejects on its own.
-    """
-    source = " ".join(raw_tokens[flag_index + 1:])
-    if not _inline_source_runs_hermes_entrypoint_in_process(source):
-        return None
-    literal = _sys_argv_literal_from_source(source)
-    if literal is None:
-        return None
-    try:
-        argv = ast.literal_eval(literal)
-    except (ValueError, SyntaxError):
-        return None
-    if not isinstance(argv, list) or not argv:
-        return None
-    return _gateway_command_subcommand(" ".join(str(part) for part in argv), _inline=False)
-
-
-def _gateway_command_subcommand(command: str | None, *, _inline: bool = True) -> str | None:
+def _gateway_command_subcommand(command: str | None) -> str | None:
     """Hermes gateway lifecycle subcommand from a command line, or None. No loose substring matches
     (``"gateway" in cmdline`` also matched ``gateway status`` / ``python -m tui_gateway``): needs a
     Hermes entrypoint plus the ``gateway`` subcommand, or a gateway-dedicated entrypoint. Tokenizes
@@ -695,14 +678,14 @@ def _gateway_command_subcommand(command: str | None, *, _inline: bool = True) ->
     # ``python -c <src> … -m hermes_cli.main gateway run``: the trailing argv belongs to the program
     # the inline source will spawn later, not to this process (#107002). Case-preserving tokens:
     # the operand-taking ``-X``/``-W``/``-Q`` must not be conflated with ``-q``/``-b``.
-    # A venv→store re-exec bootstrap is the exception: it carries its own argv in the source and has
-    # no trailing argv, so its identity is self-describing (see _self_describing_inline_gateway_subcommand).
     if command_line_runs_inline_source(cased_tokens):
-        if not _inline:
+        # …unless the source is a Hermes bootstrap running the entry point in THIS process (store
+        # launcher, launcher script, venv_sync re-entry): then its argv is this process's (#124318).
+        cased_tokens = inline_bootstrap_argv(cased_tokens)
+        if cased_tokens is None:
             return None
-        return _self_describing_inline_gateway_subcommand(
-            raw_tokens, inline_source_flag_index(cased_tokens)
-        )
+        tokens = [t.lower() for t in cased_tokens]
+        basenames = [t.rsplit("/", 1)[-1] for t in tokens]
     # The launchd job's osascript wrapper (gateway_launchd.launchd_program_arguments) carries the gateway argv
     # inside one JXA script string; the gateway itself is its child and is matched on its own command line.
     if basenames[0] == "osascript":
@@ -1078,59 +1061,7 @@ def _pid_exists(pid: int) -> bool:
         return bool(psutil.pid_exists(pid))
     except ImportError:
         pass  # Fall through to stdlib fallback.
-    if _IS_WINDOWS:
-        return _pid_exists_win32_ctypes(pid)
-    if _posix_is_zombie(pid):  # a zombie still answers os.kill(pid, 0)
-        return False
-    try:
-        os.kill(pid, 0)  # windows-footgun: ok — POSIX-only branch (the whole point of _pid_exists)
-    except PermissionError:
-        return True  # Exists but we can't signal it.
-    except OSError:  # ProcessLookupError included
-        return False
-    return True
-
-
-def _posix_is_zombie(pid: int) -> bool:
-    """Zombie via ``/proc/<pid>/stat`` field 3, or ``ps -o state=`` without /proc (macOS/BSD)."""
-    try:
-        stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
-        return len(stat_fields) > 2 and stat_fields[2] == "Z"
-    except FileNotFoundError:
-        with contextlib.suppress(Exception):
-            r = subprocess.run(
-                ["ps", "-o", "state=", "-p", str(pid)],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
-            )
-            return r.returncode == 0 and r.stdout.strip().startswith("Z")
-    except (IndexError, PermissionError, OSError):
-        pass
-    return False
-
-
-def _pid_exists_win32_ctypes(pid: int) -> bool:
-    """psutil-free Windows liveness probe via OpenProcess/WaitForSingleObject."""
-    try:
-        import ctypes
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        # Pin restypes: default c_int mangles WAIT_* DWORDs into negatives.
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        kernel32.WaitForSingleObject.restype = ctypes.c_uint
-        kernel32.GetLastError.restype = ctypes.c_uint
-        PROCESS_QUERY_LIMITED_INFORMATION, SYNCHRONIZE = 0x1000, 0x100000  # SYNCHRONIZE: for Wait*
-        WAIT_TIMEOUT, ERROR_ACCESS_DENIED = 0x00000102, 5
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
-        if not handle:
-            # ERROR_INVALID_PARAMETER (87): PID definitely gone. ACCESS_DENIED: exists
-            # but owned by another user/session. Any other error: conservative False.
-            return kernel32.GetLastError() == ERROR_ACCESS_DENIED
-        try:
-            # WAIT_TIMEOUT = still running; anything else = gone.
-            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
-        finally:
-            kernel32.CloseHandle(handle)
-    except (OSError, AttributeError):
-        return False
+    return pid_exists_stdlib(pid)
 
 
 def _release_file_lock(handle) -> None:
