@@ -33,6 +33,7 @@ import copy
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -47,6 +48,16 @@ logger = logging.getLogger(__name__)
 
 _RECEIPT_KEEP = 20  # keep the last N receipts per profile home
 COMMAND_BOUNDARY_STOP_REASON = "completed at command boundary"
+
+# Receipt ids are produced by ``secrets.token_hex(8)`` — 16 lowercase hex
+# chars, no path separators. A reader that takes an attacker-controlled
+# receipt_id and constructs ``rdir / f"{receipt_id}.json"`` MUST reject
+# anything that isn't a token_hex-shaped string: a literal ``../`` would
+# let a caller escape the receipts directory, and a stray ``.json.tmp``
+# would clobber the atomic-write temp file the writer depends on. The
+# readers below share this guard so neither path traversal nor a colliding
+# filename can reach the filesystem.
+_RECEIPT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 # Receipt state is per-CONTEXT, not a module global: a nested
 # ``hermes update`` receipt (or one in another thread) must never clobber
@@ -824,10 +835,12 @@ def read_latest_pipeline_receipt(
     """Follow the ``latest.json`` pointer and reconstruct the record. ``None`` if absent/torn.
 
     Returns ``None`` (does not raise) on any of: missing pointer, missing
-    target file, malformed JSON, schema mismatch (extra/missing fields).
-    Callers should treat ``None`` as "no acknowledged-up-to-date receipt
-    exists" — the legacy ``read_latest_receipt()`` above has the same
-    never-raise contract for its callers.
+    target file, malformed JSON, schema mismatch (extra/missing fields),
+    or a ``receipt_id`` that fails the path-traversal guard (e.g. one
+    written into ``latest.json`` by a non-orchestrator process). Callers
+    should treat ``None`` as "no acknowledged-up-to-date receipt exists" —
+    the legacy ``read_latest_receipt()`` above has the same never-raise
+    contract for its callers.
     """
     rdir = _pipeline_receipt_dir(home)
     pointer = rdir / "latest.json"
@@ -837,6 +850,12 @@ def read_latest_pipeline_receipt(
         data = json.loads(pointer.read_text(encoding="utf-8"))
         receipt_id = data["receipt_id"]
     except (json.JSONDecodeError, KeyError, OSError):
+        return None
+    # Receipt ids come from ``secrets.token_hex(8)`` (16 lowercase hex chars).
+    # Anything else — a path separator, a stray extension, a sibling-
+    # directory leak — must not be allowed to construct a filesystem path
+    # under the receipts directory.
+    if not isinstance(receipt_id, str) or not _RECEIPT_ID_RE.fullmatch(receipt_id):
         return None
     target = rdir / f"{receipt_id}.json"
     if not target.exists():
@@ -855,12 +874,24 @@ def acknowledge_pipeline_receipt(home: Path, receipt_id: str) -> bool:
     calling twice on the same id leaves the file byte-identical after the
     first call (acknowledged was already ``True``). Never raises.
 
+    The ``receipt_id`` argument is validated against ``_RECEIPT_ID_RE``
+    (16 lowercase hex chars, matching ``secrets.token_hex(8)`` output).
+    A non-conforming id — whether a path traversal payload from a caller
+    that shouldn't have access to the receipts directory, or a stray
+    ``.json.tmp`` that would clobber the writer's atomic temp file — is
+    rejected up front: a malicious caller can never cause a write to a
+    path outside the receipts directory, and the same call returns
+    ``False`` so the renderer surfaces the same "no such receipt" outcome
+    it does for a typo.
+
     Note: this rewrites the whole receipt file rather than mutating it in
     place. The same atomic write contract as ``write_pipeline_receipt``
     applies — a power loss mid-acknowledge leaves either the previous
     acknowledged=False state or the new acknowledged=True state, never a
     torn file.
     """
+    if not isinstance(receipt_id, str) or not _RECEIPT_ID_RE.fullmatch(receipt_id):
+        return False
     rdir = _pipeline_receipt_dir(home)
     target = rdir / f"{receipt_id}.json"
     if not target.exists():
