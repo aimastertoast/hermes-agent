@@ -361,12 +361,22 @@ def _state_to_dict(state) -> dict:
     ``capture_pre_state`` monkeypatch returns a bare ``type("S", (), {...})()``
     with attribute-style access, not a dataclass, so ``dataclasses.asdict``
     would raise ``TypeError`` on it. Falls back to ``vars()``.
+
+    Raw byte fields (``state_db_bytes``, ``config_yaml_bytes``) are stripped
+    here — they exist in ``UpdateSnapshot`` only to power
+    ``restore_from_snapshot`` during rollback. The receipt on disk must
+    hold hashes + metadata, not the full content (which would otherwise
+    inflate a single receipt to several gigabytes).
     """
     if dataclasses.is_dataclass(state):
-        return asdict(state)
-    if hasattr(state, "__dict__"):
-        return dict(state.__dict__)
-    return {}
+        d = asdict(state)
+    elif hasattr(state, "__dict__"):
+        d = dict(state.__dict__)
+    else:
+        return {}
+    d.pop("state_db_bytes", None)
+    d.pop("config_yaml_bytes", None)
+    return d
 
 
 # ---------------------------------------------------------------------------
