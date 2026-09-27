@@ -4645,46 +4645,6 @@ async function releaseBackendLock(updateRoot: string, tag: string): Promise<{ un
   return { unlocked: false }
 }
 
-/**
- * Kill processes that hold the venv open but were NOT spawned by this app
- * (Hindsight memory daemon, Hermes gateway workers, a user's terminal running
- * hermes).  Windows-only: the .pyd lock hazard is a Windows phenomenon.
- * Best-effort: a failed kill must never abort the update -- the re-scan in the
- * preflight catches anything that survives.
- */
-async function killExternalVenvHolders(updateRoot) {
-  if (!IS_WINDOWS) return []
-
-  const killedPids = []
-
-  try {
-    const scanOutcome = await scanVenvBlockers(updateRoot)
-
-    if (scanOutcome.kind !== 'blocked' || !scanOutcome.result.processes.length) {
-      return killedPids
-    }
-
-    for (const proc of scanOutcome.result.processes) {
-      try {
-        execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], {
-          stdio: 'ignore'
-        })
-        killedPids.push(proc.pid)
-        rememberLog(`[updates] killed external venv holder pid=${proc.pid} name=${proc.name}`)
-      } catch (e) {
-        // Best-effort: log and continue; a survivor is caught by the re-scan.
-        rememberLog(`[updates] could not kill venv holder pid=${proc.pid}: ${String(e)}`)
-      }
-    }
-
-    return killedPids
-  } catch (e) {
-    rememberLog(`[updates] killExternalVenvHolders failed: ${String(e)}`)
-
-    return killedPids
-  }
-}
-
 // applyUpdates — hand off to the installer's --update flow, then exit.
 //
 // The desktop is a pure consumer: it does NOT git pull / pip install / rebuild
@@ -4959,9 +4919,7 @@ async function applyUpdates(): Promise<UpdaterApplyResultWire> {
     )
 
     return { ok: true, handedOff: true, updater }
-  } finally {
-    updateInFlight = false
-  }
+  })
 }
 
 async function handOffWindowsBootstrapRecovery(reason) {
