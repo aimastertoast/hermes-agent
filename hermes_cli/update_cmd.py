@@ -84,9 +84,9 @@ except ImportError:  # P5 import guard (2026-09-15): a missing restorer must not
         return _PreflightNoopReport()
 try:
     from hermes_cli.update_cmd_windows import (  # noqa: F401
-        _HOLDER_VALUE_FLAGS_FALLBACK, _clear_windows_venv_holders_or_exit,
+        _HOLDER_VALUE_FLAGS_FALLBACK,
         _cold_start_windows_gateway_after_update, _desktop_owns_gateway_lifecycle,
-        _detect_venv_python_processes, _format_venv_python_holders_message,
+        _detect_venv_python_processes,
         _handoff_reapable_backend_pids, _hermes_holder_subcommand, _holder_value_flags,
         _holder_value_flags_cache, _ledger_manual_serve_holders, _ledger_reapable_backend_pids,
         _leftover_pausable_gateway_pids, _looks_like_desktop_control_plane,
@@ -115,11 +115,9 @@ except ImportError:  # P5 extended guard (2026-09-16): patch drift must not bric
     _list_stub = lambda *a, **kw: []  # noqa: E731
     _empty_str = lambda *a, **kw: ""  # noqa: E731
     _HOLDER_VALUE_FLAGS_FALLBACK = ()
-    _clear_windows_venv_holders_or_exit = _stub
     _cold_start_windows_gateway_after_update = _predicate
     _desktop_owns_gateway_lifecycle = _predicate
     _detect_venv_python_processes = _list_stub
-    _format_venv_python_holders_message = _empty_str
     _handoff_reapable_backend_pids = _list_stub
     _hermes_holder_subcommand = _stub
     _holder_value_flags = _stub
