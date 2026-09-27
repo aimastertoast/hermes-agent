@@ -1,6 +1,7 @@
 """Gateway runtime status helpers: PID/lock/marker files under ``{HERMES_HOME}`` (one set per
 home/profile) that tell whether the gateway daemon is running."""
 
+import ast
 import asyncio
 import contextlib
 import copy
@@ -588,7 +589,92 @@ def command_line_runs_inline_source(tokens: list[str]) -> bool:
     return inline_source_flag_index(tokens) is not None
 
 
-def _gateway_command_subcommand(command: str | None) -> str | None:
+# A bootstrap that ends by running a Hermes entrypoint as ``__main__`` — the shape
+# ``hermes_cli.venv_sync.relaunch_command`` builds when a venv whose ABI no longer matches the managed
+# generation hands off to the store interpreter. It runs the gateway IN this process.
+#
+# The call must be the LAST thing the source does: a command line that appends a spawner's trailing
+# argv to a real bootstrap (``… alter_sys=True) 14980 python -m hermes_cli.main gateway run``) is
+# that watcher, not a gateway, and anchoring on the closing paren is what tells them apart. Requiring
+# no ``;`` before it also rejects a source that runs the entrypoint and then goes on to start
+# something else. Both are #107002 wearing the bootstrap's clothes.
+_INLINE_HERMES_RUNPY_TAIL_RE = re.compile(
+    r"runpy\.run_(?:module|path)\([^;]*?\)\s*\Z", re.DOTALL
+)
+_SYS_ARGV_ASSIGNMENT_RE = re.compile(r"\bsys\.argv\s*=\s*\[")
+
+
+def _inline_source_runs_hermes_entrypoint_in_process(source: str) -> bool:
+    """True when *source* finishes by running a Hermes entrypoint as ``__main__`` in this process."""
+    tail = _INLINE_HERMES_RUNPY_TAIL_RE.search(source)
+    if tail is None:
+        return False
+    target = re.search(r"run_(?:module|path)\(\s*(['\"][^'\"]+['\"])", tail.group(0))
+    if target is None:
+        return False
+    # The literal is repr-escaped, so its separators are DOUBLED backslashes; collapse them or
+    # ``hermes_cli\\main.py`` normalizes to ``hermes_cli//main.py`` and matches no entrypoint.
+    normalized = re.sub(r"/+", "/", target.group(1).strip("\"'").replace("\\", "/"))
+    return "hermes_cli.main" in normalized or "hermes_cli/main.py" in normalized
+
+
+def _sys_argv_literal_from_source(source: str) -> str | None:
+    """The balanced list literal a bootstrap assigns to ``sys.argv``, or None.
+
+    Brackets are matched by scanning rather than by regex, because a home path may itself contain
+    one; the literal is only ever parsed with ``ast.literal_eval``, never evaluated.
+    """
+    match = _SYS_ARGV_ASSIGNMENT_RE.search(source)
+    if match is None:
+        return None
+    start = match.end() - 1
+    depth = 0
+    quote = ""
+    for index in range(start, len(source)):
+        char = source[index]
+        if quote:
+            if char == quote and source[index - 1] != "\\":
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "[(":
+            depth += 1
+        elif char in "])":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    return None
+
+
+def _self_describing_inline_gateway_subcommand(raw_tokens: list[str], flag_index: int) -> str | None:
+    """Subcommand of an inline source that describes its OWN identity, else None.
+
+    ``#107002`` refuses inline source because a *spawner*'s trailing argv belongs to the process it
+    starts later. A re-exec bootstrap is the mirror image and is safe to read: the argv is assigned
+    inside the source itself, so no borrowed argv can be mistaken for this process's identity.
+
+    The source is the LAST argument, so it is recovered by re-joining the tokens after ``-c`` — a
+    command line reaches us as a space-join of argv, which is lossy for a source containing spaces
+    but exactly invertible here. That also means "no trailing argv" cannot be counted separately:
+    a command line with a spawner's trailing argv reconstructs a source that does not END in the
+    runpy call, which the anchored tail check rejects on its own.
+    """
+    source = " ".join(raw_tokens[flag_index + 1:])
+    if not _inline_source_runs_hermes_entrypoint_in_process(source):
+        return None
+    literal = _sys_argv_literal_from_source(source)
+    if literal is None:
+        return None
+    try:
+        argv = ast.literal_eval(literal)
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(argv, list) or not argv:
+        return None
+    return _gateway_command_subcommand(" ".join(str(part) for part in argv), _inline=False)
+
+
+def _gateway_command_subcommand(command: str | None, *, _inline: bool = True) -> str | None:
     """Hermes gateway lifecycle subcommand from a command line, or None. No loose substring matches
     (``"gateway" in cmdline`` also matched ``gateway status`` / ``python -m tui_gateway``): needs a
     Hermes entrypoint plus the ``gateway`` subcommand, or a gateway-dedicated entrypoint. Tokenizes
@@ -609,8 +695,14 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     # ``python -c <src> … -m hermes_cli.main gateway run``: the trailing argv belongs to the program
     # the inline source will spawn later, not to this process (#107002). Case-preserving tokens:
     # the operand-taking ``-X``/``-W``/``-Q`` must not be conflated with ``-q``/``-b``.
+    # A venv→store re-exec bootstrap is the exception: it carries its own argv in the source and has
+    # no trailing argv, so its identity is self-describing (see _self_describing_inline_gateway_subcommand).
     if command_line_runs_inline_source(cased_tokens):
-        return None
+        if not _inline:
+            return None
+        return _self_describing_inline_gateway_subcommand(
+            raw_tokens, inline_source_flag_index(cased_tokens)
+        )
     # The launchd job's osascript wrapper (gateway_launchd.launchd_program_arguments) carries the gateway argv
     # inside one JXA script string; the gateway itself is its child and is matched on its own command line.
     if basenames[0] == "osascript":

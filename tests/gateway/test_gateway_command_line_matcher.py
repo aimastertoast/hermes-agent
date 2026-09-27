@@ -165,3 +165,81 @@ def test_accepts_atomic_desktop_gateway():
     assert matches_runtime(ATOMIC_DESKTOP) is True
 
 
+# ``hermes_cli.venv_sync.relaunch_command`` hands a venv whose ABI no longer matches the managed
+# generation off to the store interpreter as ``python -I -c <bootstrap>``, where <bootstrap> runs
+# the gateway in THIS process. On a profile launched from a venv that process is the gateway, and it
+# writes its own ``gateway.pid``/``gateway.lock`` — so refusing the shape made the identity probe
+# fail and aborted ``hermes update`` ("Could not inspect gateway PID for profile <name>") on any
+# install with a non-default profile running.
+RELAUNCH_BOOTSTRAP = (
+    r"C:\hermes\tools\python-3.14.7\python.exe -I -c "
+    "import sys, runpy; sys.path.insert(0, 'C:\\\\hermes\\\\hermes-agent'); "
+    "sys.argv = ['C:\\\\hermes\\\\hermes-agent\\\\hermes_cli\\\\main.py', '--profile', 'bobby', "
+    "'gateway', 'run']; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
+)
+
+RELAUNCH_RUN_PATH_BOOTSTRAP = (
+    r"C:\hermes\tools\python-3.14.7\python.exe -I -c "
+    "import sys, runpy; sys.path.insert(0, 'C:\\\\hermes\\\\hermes-agent'); "
+    "sys.argv = ['C:\\\\hermes\\\\hermes-agent\\\\hermes_cli\\\\main.py', 'gateway', 'restart']; "
+    "runpy.run_path('C:\\\\hermes\\\\hermes-agent\\\\hermes_cli\\\\main.py', run_name='__main__')"
+)
+
+
+@pytest.mark.parametrize(
+    "cmd, subcommand",
+    [(RELAUNCH_BOOTSTRAP, "run"), (RELAUNCH_RUN_PATH_BOOTSTRAP, "restart")],
+)
+def test_accepts_in_process_relaunch_bootstrap(cmd, subcommand):
+    assert matches_runtime(cmd) is True
+    # The subcommand is read out of the source's own sys.argv, not off trailing tokens.
+    assert spawn_intent(cmd) == subcommand
+
+
+def test_relaunch_bootstrap_argv_decides_the_subcommand():
+    """The subcommand comes from the source's own ``sys.argv`` — a bootstrap that boots a
+    non-gateway subcommand is not a gateway runtime."""
+    cmd = (
+        r"python.exe -I -c "
+        "import sys, runpy; sys.path.insert(0, 'C:\\\\hermes'); "
+        "sys.argv = ['C:\\\\hermes\\\\hermes_cli\\\\main.py', 'gateway', 'status']; "
+        "runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
+    )
+    assert matches(cmd) is False
+    assert matches_runtime(cmd) is False
+    assert spawn_intent(cmd) == "status"
+
+
+# Each of these is the #107002 shape wearing the bootstrap's clothes. The spawn-intent answer is
+# unchanged; only the identity answer differs, and only because the argv is embedded in the source
+# instead of trailing it.
+SELF_DESCRIBING_REJECT = [
+    # A spawner's trailing argv after a real bootstrap: the gateway is a DIFFERENT process, so this
+    # process's identity is the watcher. The runpy tail anchor is what rejects it.
+    RELAUNCH_BOOTSTRAP + " 14980 python -m hermes_cli.main gateway run",
+    # Bootstrap runs something that is not a Hermes entrypoint.
+    r"python.exe -I -c "
+    "import sys, runpy; sys.argv = ['x.py', 'gateway', 'run']; "
+    "runpy.run_module('some_other_module', run_name='__main__')",
+    # Bootstrap runs the entrypoint but never says what argv it is running.
+    r"python.exe -I -c "
+    "import sys, runpy; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)",
+    # Bootstrap is not a runpy handoff at all — it spawns, so the trailing argv is not its own.
+    'python.exe -I -c "import subprocess; subprocess.Popen([\'x\'])" 14980 gateway run',
+    # The runpy handoff is not the final statement, so the source may go on to start something else.
+    r"python.exe -I -c "
+    "import sys, runpy; sys.argv = ['x.py', 'gateway', 'run']; "
+    "runpy.run_module('hermes_cli.main', run_name='__main__'); spawn_something_else()",
+]
+
+
+@pytest.mark.parametrize("cmd", SELF_DESCRIBING_REJECT)
+def test_rejects_inline_source_that_is_not_self_describing(cmd):
+    assert matches(cmd) is False
+    assert matches_runtime(cmd) is False
+
+
+def test_relaunch_bootstrap_is_still_recognised_as_spawn_intent():
+    assert spawn_intent(RELAUNCH_BOOTSTRAP) == "run"
+
+
