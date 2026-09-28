@@ -1315,32 +1315,59 @@ def _relaunch_verify_timeout_s(profiles: dict, unmapped: list, pid_exists) -> fl
     return float(GATEWAY_RESTART_WATCHER_TIMEOUT_S) + _RELAUNCH_VERIFY_TIMEOUT_S
 
 
-def _verify_relaunched_gateways_alive(token: dict, profiles: dict, unmapped: list) -> None:
-    """Gate success on the shared liveness poll: a truthy launch only proves the watcher was created.
+def _verify_relaunched_gateways_alive(token: dict, profiles: dict, unmapped: list) -> list[str]:
+    """Gate success on the shared liveness poll, PER PROFILE; returns the profiles seen alive.
 
-    A parent Job Object denying CREATE_BREAKAWAY_FROM_JOB can kill the gateway on updater teardown;
-    ``all_profiles=True`` covers the fleet. Vouched PIDs are persisted so a death AFTER updater exit
-    is reported by the next CLI invocation (best-effort)."""
+    A truthy launch only proves the watcher was created, so the caller must not name a profile in
+    its ✓ until this poll has seen it. Each relaunched profile is polled against its OWN identity
+    files, because a fleet-wide poll returns as soon as ANY gateway is live: an already-healthy
+    sibling then vouched for a profile that never came back, and the updater printed "✓ Restarting
+    Windows gateway profile(s)" naming a gateway that was dead (#48820, observed live 2026-09-28
+    on the bobby profile). Unmapped replays carry an argv rather than a profile name, so they still
+    ride the unscoped fleet probe. Profiles that did not come back stay on the token, so
+    plan-vs-execution reconciliation still surfaces them (Windows has no watcher to recover them).
+    Vouched PIDs are persisted so a death AFTER updater exit is reported by the next CLI
+    invocation (best-effort)."""
     with _abort_on_error("Could not load Windows gateway liveness helpers"):
         from gateway.status import _pid_exists
+        from hermes_cli.profiles import get_profile_dir
         from hermes_cli import gateway_windows
     timeout_s = _relaunch_verify_timeout_s(profiles, unmapped, _pid_exists)
-    ready_pids = gateway_windows._wait_for_gateway_ready(
-        timeout_s=timeout_s, all_profiles=True, pid_filter=_owned_gateway_pids
-    )
-    if not ready_pids:
-        token["profiles"] = dict(profiles)
-        token["unmapped"] = list(unmapped)
+    vouched: list[int] = []
+    verified: list[str] = []
+    # Only the profiles that did NOT come back stay on the token, so plan-vs-execution
+    # reconciliation still surfaces them (Windows has no watcher to recover them).
+    unverified: dict[str, int] = {}
+    for name in sorted(profiles):
+        ready_pids = gateway_windows._wait_for_gateway_ready(
+            timeout_s=timeout_s, home=Path(get_profile_dir(name))
+        )
+        if ready_pids:
+            vouched.extend(ready_pids)
+            verified.append(name)
+        else:
+            unverified[name] = profiles[name]
+    dead_unmapped = [entry for entry in unmapped if entry.get("argv") and entry.get("pid")]
+    if dead_unmapped:
+        if gateway_windows._wait_for_gateway_ready(timeout_s=timeout_s, all_profiles=True):
+            dead_unmapped = []
+        else:
+            dead_unmapped = list(unmapped)
+    if unverified or dead_unmapped:
+        token["profiles"] = dict(unverified)
+        token["unmapped"] = list(dead_unmapped)
+        named = ", ".join(sorted(unverified)) or "an unmapped gateway process"
         print(
-            "\n  ⚠ Windows gateway restart could not be verified — no stable gateway process appeared after relaunch.\n"
+            f"\n  ⚠ Windows gateway restart could not be verified for: {named}.\n"
             "    (The respawned gateway may have been killed by a parent Job Object during updater teardown, #48820.)\n"
             "    Recover with: hermes gateway restart"
         )
         # Never raise from the atexit path: log the failure (the message above already prints the
         # recover hint). The process exit code reflects the UPDATE result only.
-        logger.warning("Windows gateway relaunch after update was not verified alive; Recover with: hermes gateway restart")
+        logger.warning("Windows gateway relaunch after update was not verified alive for %s; Recover with: hermes gateway restart", named)
     with suppress(Exception):
-        gateway_windows._write_start_attestation(ready_pids, "post-update relaunch")
+        gateway_windows._write_start_attestation(vouched, "post-update relaunch")
+    return verified
 
 
 def _resume_windows_gateways_after_update(token: dict | None) -> None:
@@ -1400,12 +1427,15 @@ def _resume_windows_gateways_after_update_impl(token: dict) -> None:
         token["resume_needed"] = False
         return
     relaunched, unmapped_relaunched = _relaunch_paused_gateways(token, profiles, unmapped)
+    verified: list[str] = []
     if relaunched or unmapped_relaunched:
-        _verify_relaunched_gateways_alive(token, profiles, unmapped)
-    if relaunched:
-        print(f"\n  ✓ Restarting Windows gateway profile(s): {', '.join(relaunched)}")
-    if unmapped_relaunched:
-        lead = "" if relaunched else "\n"
+        verified = _verify_relaunched_gateways_alive(token, profiles, unmapped)
+    # Only vouch for a profile the per-profile liveness poll actually saw. A truthy launch only
+    # proves the watcher was spawned; naming a dead gateway in a ✓ is the #48820 user-visible lie.
+    if verified:
+        print(f"\n  ✓ Restarting Windows gateway profile(s): {', '.join(verified)}")
+    if unmapped_relaunched and not token.get("unmapped"):
+        lead = "" if verified else "\n"
         print(f"{lead}  ✓ Restarting {unmapped_relaunched} unmapped Windows gateway process(es)")
     # After the paused profiles are back: a dead-attested sibling that fails to cold-start must not
     # keep the profiles that WERE running from being relaunched.
