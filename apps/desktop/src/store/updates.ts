@@ -17,12 +17,13 @@ import type {
 } from '@/global'
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { Codecs, persistentAtom } from '@/lib/persisted'
 import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
 import { reconnectGateway } from '@/store/gateway-reconnect'
 import { dismissNotification, notify } from '@/store/notifications'
 import { $connection } from '@/store/session'
-import type { BackendUpdateCheckResponse } from '@/types/hermes'
+import type { BackendUpdateCheckResponse, UpdateReceipt } from '@/types/hermes'
 
 /** Keyed per retired-channel revision: a new retirement (or a revision bump on
  *  the same channel) re-shows the notice, a plain re-check never does. */
@@ -57,6 +58,52 @@ export const $updateApply = atom<UpdateApplyState>(IDLE)
 export const $updateChecking = atom<boolean>(false)
 export const $updateOverlayOpen = atom<boolean>(false)
 export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
+
+// ── Update-settings atoms (task 9) ───────────────────────────────────────────
+//
+// Renderer-side toggles for the orchestrator's user-facing modes and the most
+// recent durable update receipt. The orchestrator is the source of truth for
+// what runs; these atoms only feed it user preference on each invoke and keep
+// the receipt visible in the overlay so the user can acknowledge it once.
+
+/** When true, the orchestrator's auto-classifier may run `hermes update`
+ *  unattended for changes it can prove safe (no user code touched). Default
+ *  off: the user must opt in once. Persisted — the orchestrator reads it on
+ *  every invoke. */
+export const $updateSafeModeAuto = persistentAtom<boolean>('hermes.update.safeModeAuto', false, Codecs.bool)
+
+/** When true, force the update to proceed past the
+ *  ``LOCAL_AHEAD_REFUSAL`` gate (the user's local checkout has commits that
+ *  have not been pushed to the active channel's origin). The orchestrator's
+ *  force-requirement gate (``evaluate_update_force_requirement``) consults
+ *  this toggle on every invoke and only blocks the user on
+ *  ``local-ahead`` / ``force-pushed`` states when the toggle is OFF.
+ *
+ *  The setting was previously named ``$updateForceModeLocal``, which
+ *  described a DIFFERENT feature (force the apply to target the local
+ *  checkout instead of an active remote backend) that was never wired up.
+ *  Renamed to reflect the actual semantic: it arms the local-ahead bypass
+ *  documented in ``update_contract.LOCAL_AHEAD_REFUSAL`` and surfaced as
+ *  the "Allow Update Now when local is ahead" toggle in
+ *  ``UpdatesSettings``. Default off: the user must opt in once per install.
+ *  Persisted — the orchestrator reads it on every invoke.
+ */
+export const $updateAllowLocalAhead = persistentAtom<boolean>('hermes.update.allowLocalAhead', false, Codecs.bool)
+
+/** The most recent durable receipt the renderer has loaded. Null when none
+ *  exists yet or after the user acknowledges it. NOT persisted — the
+ *  authoritative copy lives on disk under ``<home>/update_receipts/``; a
+ *  later task will hydrate this atom from main on startup and after each
+ *  apply finishes. */
+export const $lastReceipt = atom<UpdateReceipt | null>(null)
+
+/** Whether the user has acknowledged the most recent receipt. Default true
+ *  so a fresh install does not re-show an old receipt on first paint. The
+ *  apply flow flips it back to false when a new receipt lands; the overlay's
+ *  "Acknowledge" action flips it back to true. Persisted so the choice
+ *  survives relaunches (re-rendering the receipt on every boot would be
+ *  punishing for users who already closed it once). */
+export const $lastReceiptAcknowledged = persistentAtom<boolean>('hermes.update.lastReceiptAck', true, Codecs.bool)
 
 // Client and backend are independently updatable; each keeps its own state.
 export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)
@@ -702,16 +749,13 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
 
     if (!result?.handedOff) {
       if (result?.ok) {
-        // Updated, but couldn't relaunch in place (AppImage / dev run). Dismiss
-        // the overlay and let the user know the new version loads next launch
-        // rather than stranding them on an un-closeable spinner.
+        // AgnesCode GUI permanent fix: an in-place (non-handoff) update rebuilt
+        // the bundle but the running renderer still serves the old one. Re-exec
+        // the app so the new bundle loads; keep the toast as a fallback when the
+        // bridge is unavailable.
         setUpdateOverlayOpen(false)
         resetUpdateApplyState()
-
-        if (result.updateAvailable === false) {
-          return result
-        }
-
+        void relaunchIfBundleStaleAfterInPlaceUpdate()
         notify({
           durationMs: 8000,
           id: UPDATE_TOAST_ID,
@@ -747,6 +791,44 @@ const BACKEND_ACTION_POLL_MS = 1500
 const BACKEND_ACTION_MAX_MS = 6 * 60 * 1000
 const BACKEND_RETURN_MAX_MS = 4 * 60 * 1000
 
+/**
+ * AgnesCode GUI permanent fix: ask main to re-exec Hermes.exe so a freshly
+ * rebuilt renderer bundle actually loads. Returns true when the relaunch was
+ * requested; false when the bridge is missing (non-desktop run) or main
+ * declined (e.g. a detached updater hand-off already owns the relaunch).
+ */
+function requestDesktopRelaunch(): Promise<boolean> {
+  const relaunch = window.hermesDesktop?.updates?.relaunchAfterUpdate
+
+  if (typeof relaunch !== 'function') {
+    return Promise.resolve(false)
+  }
+
+  return relaunch()
+    .then(result => !!result?.ok)
+    .catch(() => false)
+}
+
+/** After an in-place update that rebuilt the bundle, re-exec the app when the
+ *  running renderer is provably behind the updated tree (bundle skew). Scoped
+ *  to a LOCAL backend — a remote backend lives on another machine, so its
+ *  update must never relaunch this GUI. */
+async function relaunchIfBundleStaleAfterInPlaceUpdate(): Promise<void> {
+  if (isRemoteMode()) {
+    return
+  }
+
+  try {
+    const version = await window.hermesDesktop?.getVersion?.()
+
+    if (version?.bundleOutOfSync) {
+      await requestDesktopRelaunch()
+    }
+  } catch {
+    // Best-effort: never let a relaunch probe break the apply result.
+  }
+}
+
 function finishBackendApply(returned: boolean): DesktopUpdateApplyResult {
   if (returned) {
     $backendUpdateApply.set(IDLE)
@@ -765,6 +847,12 @@ function finishBackendApply(returned: boolean): DesktopUpdateApplyResult {
     // affordance in remote mode targets the backend, so nothing ever told
     // them the app itself was stale). Nudge with a one-click client update.
     void maybeNudgeClientAfterBackendUpdate()
+
+    // AgnesCode GUI permanent fix: a LOCAL backend update just rebuilt the
+    // desktop bundle, but this app stayed alive (the in-app suicide-guard
+    // refuses to taskkill its own parent) so the renderer still serves the
+    // OLD bundle. Re-exec the app when the bundle is now provably behind.
+    void relaunchIfBundleStaleAfterInPlaceUpdate()
 
     return { ok: true, message: 'Backend update applied.' }
   }

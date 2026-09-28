@@ -21,6 +21,19 @@ logger = logging.getLogger("hermes_cli.update_cmd")  # log-record parity with th
 
 _BACKEND_PURPOSES = ("serve", "dashboard")
 
+# Gate for the atexit resume callback (Defect B ordering fix): True only after the update flow's
+# fetch succeeded (checkout about to move / update completing normally). While False (failed fetch,
+# pre-fetch abort) the resume callback only restores gateways THIS updater paused - job-proof via
+# the Scheduled Task - and skips the post-update launcher refresh / cold-start handling, so a
+# transient GitHub 429 "touches nothing else" and never recreates the #48820 Job-Object kill window.
+UPDATE_APPLIED_NEW_CODE = False
+
+
+def _set_update_applied_new_code(value: bool) -> None:
+    """Flip :data:`UPDATE_APPLIED_NEW_CODE` from the update flow (module-level so atexit sees it)."""
+    global UPDATE_APPLIED_NEW_CODE
+    UPDATE_APPLIED_NEW_CODE = bool(value)
+
 
 def _try_call(fn, log_message: str, *log_args, default=None):
     """``fn()``, or *default* after logging the exception at debug (``log_message`` gets ``*log_args, exc``)."""
@@ -1186,6 +1199,46 @@ def _resume_windows_services(token: dict) -> None:
         print("\n  ✓ Restarted Windows gateway service(s): " + ", ".join(restarted_services))
 
 
+def _scheduled_task_name_for_profile(profile: str) -> str:
+    """Task-Scheduler task name for a profile gateway (default: ``Hermes_Gateway``)."""
+    from hermes_cli import gateway_windows
+    base = gateway_windows._TASK_NAME_DEFAULT
+    return base if (not profile or profile == "default") else f"{base}_{profile}"
+
+
+def _relaunch_gateway_via_scheduled_task(profile: str, old_pid: int) -> bool:
+    """Relaunch a profile gateway through its registered Scheduled Task; True on success.
+
+    ``schtasks /run`` hands the launch to Task Scheduler, which spawns the gateway OUTSIDE the
+    updater's Job Object - the only reliable escape when the parent job denies
+    CREATE_BREAKAWAY_FROM_JOB (the #48820 teardown kill). The task is the same durable path the
+    gateway already uses at login/reboot (``Hermes_Gateway.cmd``). Returns False when the task is
+    not registered or /run fails, so the caller can fall back to an in-process spawn.
+    """
+    if sys.platform != "win32":
+        return False
+    from hermes_cli import gateway_windows
+    task_name = _scheduled_task_name_for_profile(profile)
+    try:
+        code, _out, _err = gateway_windows._exec_schtasks(["/Query", "/TN", task_name])
+    except Exception as exc:
+        logger.debug("Could not query scheduled task %s: %s", task_name, exc)
+        return False
+    if code != 0:
+        logger.debug("Scheduled task %s not registered; falling back to direct spawn", task_name)
+        return False
+    try:
+        code, out, err = gateway_windows._exec_schtasks(["/Run", "/TN", task_name])
+    except Exception as exc:
+        logger.warning("schtasks /run %s raised: %s", task_name, exc)
+        return False
+    if code != 0:
+        logger.warning("schtasks /run %s failed (code %s): %s", task_name, code, (err or out or "").strip())
+        return False
+    logger.info("Relaunched Windows gateway profile %s via scheduled task %s", profile, task_name)
+    return True
+
+
 def _relaunch_paused_gateways(token: dict, profiles: dict, unmapped: list) -> tuple[list[str], int]:
     """Relaunch profile gateways and replay unmapped argv; ``(relaunched_profiles, unmapped_count)``.
 
@@ -1198,7 +1251,12 @@ def _relaunch_paused_gateways(token: dict, profiles: dict, unmapped: list) -> tu
     relaunched = []
     failed_profiles = {}
     for profile, old_pid in sorted(profiles.items()):
-        if _try_call(lambda p=profile, o=old_pid: launch_detached_profile_gateway_restart(str(p), int(o)),
+        def _relaunch_one(p=profile, o=old_pid) -> bool:
+            # Preferred: the Scheduled Task spawns outside the updater's Job Object so the gateway
+            # survives updater teardown (#48820; the updater's job denies breakaway). Fall back to
+            # the watcher-based restart (tries CREATE_BREAKAWAY_FROM_JOB) for missing tasks.
+            return _relaunch_gateway_via_scheduled_task(str(p), int(o)) or launch_detached_profile_gateway_restart(str(p), int(o))
+        if _try_call(_relaunch_one,
                      "Could not restart Windows gateway profile %s after update: %s", profile):
             relaunched.append(str(profile))
         else:
@@ -1257,34 +1315,70 @@ def _relaunch_verify_timeout_s(profiles: dict, unmapped: list, pid_exists) -> fl
     return float(GATEWAY_RESTART_WATCHER_TIMEOUT_S) + _RELAUNCH_VERIFY_TIMEOUT_S
 
 
-def _verify_relaunched_gateways_alive(token: dict, profiles: dict, unmapped: list) -> None:
-    """Gate success on the shared liveness poll: a truthy launch only proves the watcher was created.
+def _verify_relaunched_gateways_alive(token: dict, profiles: dict, unmapped: list) -> list[str]:
+    """Gate success on the shared liveness poll, PER PROFILE; returns the profiles seen alive.
 
-    A parent Job Object denying CREATE_BREAKAWAY_FROM_JOB can kill the gateway on updater teardown;
-    ``all_profiles=True`` covers the fleet. Vouched PIDs are persisted so a death AFTER updater exit
-    is reported by the next CLI invocation (best-effort)."""
+    A truthy launch only proves the watcher was created, so the caller must not name a profile in
+    its ✓ until this poll has seen it. Each relaunched profile is polled against its OWN identity
+    files, because a fleet-wide poll returns as soon as ANY gateway is live: an already-healthy
+    sibling then vouched for a profile that never came back, and the updater printed "✓ Restarting
+    Windows gateway profile(s)" naming a gateway that was dead (#48820, observed live 2026-09-28
+    on the bobby profile). Unmapped replays carry an argv rather than a profile name, so they still
+    ride the unscoped fleet probe. Profiles that did not come back stay on the token, so
+    plan-vs-execution reconciliation still surfaces them (Windows has no watcher to recover them).
+    Vouched PIDs are persisted so a death AFTER updater exit is reported by the next CLI
+    invocation (best-effort)."""
     with _abort_on_error("Could not load Windows gateway liveness helpers"):
         from gateway.status import _pid_exists
+        from hermes_cli.profiles import get_profile_dir
         from hermes_cli import gateway_windows
     timeout_s = _relaunch_verify_timeout_s(profiles, unmapped, _pid_exists)
-    ready_pids = gateway_windows._wait_for_gateway_ready(
-        timeout_s=timeout_s, all_profiles=True, pid_filter=_owned_gateway_pids
-    )
-    if not ready_pids:
-        token["profiles"] = dict(profiles)
-        token["unmapped"] = list(unmapped)
+    vouched: list[int] = []
+    verified: list[str] = []
+    # Only the profiles that did NOT come back stay on the token, so plan-vs-execution
+    # reconciliation still surfaces them (Windows has no watcher to recover them).
+    unverified: dict[str, int] = {}
+    for name in sorted(profiles):
+        ready_pids = gateway_windows._wait_for_gateway_ready(
+            timeout_s=timeout_s, home=Path(get_profile_dir(name))
+        )
+        if ready_pids:
+            vouched.extend(ready_pids)
+            verified.append(name)
+        else:
+            unverified[name] = profiles[name]
+    dead_unmapped = [entry for entry in unmapped if entry.get("argv") and entry.get("pid")]
+    if dead_unmapped:
+        if gateway_windows._wait_for_gateway_ready(timeout_s=timeout_s, all_profiles=True):
+            dead_unmapped = []
+        else:
+            dead_unmapped = list(unmapped)
+    if unverified or dead_unmapped:
+        token["profiles"] = dict(unverified)
+        token["unmapped"] = list(dead_unmapped)
+        named = ", ".join(sorted(unverified)) or "an unmapped gateway process"
         print(
-            "\n  ⚠ Windows gateway restart could not be verified — no stable gateway process appeared after relaunch.\n"
+            f"\n  ⚠ Windows gateway restart could not be verified for: {named}.\n"
             "    (The respawned gateway may have been killed by a parent Job Object during updater teardown, #48820.)\n"
             "    Recover with: hermes gateway restart"
         )
-        raise RuntimeError("Windows gateway relaunch after update was not verified alive")
+        # Never raise from the atexit path: log the failure (the message above already prints the
+        # recover hint). The process exit code reflects the UPDATE result only.
+        logger.warning("Windows gateway relaunch after update was not verified alive for %s; Recover with: hermes gateway restart", named)
     with suppress(Exception):
-        gateway_windows._write_start_attestation(ready_pids, "post-update relaunch")
+        gateway_windows._write_start_attestation(vouched, "post-update relaunch")
+    return verified
 
 
 def _resume_windows_gateways_after_update(token: dict | None) -> None:
-    """Restart Windows profile gateways previously paused for update."""
+    """Restart Windows profile gateways previously paused for update.
+
+    Never raises: this is also registered as an atexit callback, so a gateway-relaunch failure is
+    logged with the recover hint and returned - the process exit code must reflect the UPDATE
+    result only (#48820). When :data:`UPDATE_APPLIED_NEW_CODE` is False (failed fetch / pre-fetch
+    abort) the impl skips post-update-only handling (launcher refresh, cold-start) and just
+    restores gateways THIS updater paused, job-proof via the Scheduled Task.
+    """
     from hermes_cli.update_cmd import _m
     if not token or not token.get("resume_needed"):
         return
@@ -1299,14 +1393,32 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
     if not _m()._is_windows():
         token["resume_needed"] = False
         return
+    try:
+        _resume_windows_gateways_after_update_impl(token)
+    except Exception as exc:
+        # A relaunch/verification failure must never escape (atexit would print "Exception ignored
+        # in atexit callback" and the log would read as a crash): log the recover hint and return.
+        logger.error("Windows gateway resume after update failed: %s", exc)
+        print(
+            "\n  Windows gateway restart incomplete: %s\n"
+            "    Recover with: hermes gateway restart" % exc
+        )
+
+
+def _resume_windows_gateways_after_update_impl(token: dict) -> None:
+    """Actual resume work; the public wrapper guarantees it never raises (atexit-safe)."""
+    from hermes_cli.update_cmd import _m
     # Regenerate launcher scripts before respawning so a legacy pythonw-era
     # autostart entry comes back on the current design at next login too.
-    _m()._refresh_windows_gateway_launchers()
+    # Only after the checkout actually moved: on a failed fetch nothing changed, so "touch
+    # nothing else" and leave the running (unchanged) launchers alone.
+    if UPDATE_APPLIED_NEW_CODE:
+        _m()._refresh_windows_gateway_launchers()
     _resume_windows_services(token)
     profiles = token.get("profiles") or {}
     unmapped = token.get("unmapped") or []
     if not profiles and not any(u.get("argv") for u in unmapped):
-        if token.get("cold_start_if_installed"):
+        if UPDATE_APPLIED_NEW_CODE and token.get("cold_start_if_installed"):
             # Before the per-profile spawns: this guard is fleet-wide (any live gateway ⇒ done).
             if not _m()._cold_start_windows_gateway_after_update(token):
                 raise RuntimeError("Windows gateway cold-start was not verified")
@@ -1315,12 +1427,15 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
         token["resume_needed"] = False
         return
     relaunched, unmapped_relaunched = _relaunch_paused_gateways(token, profiles, unmapped)
+    verified: list[str] = []
     if relaunched or unmapped_relaunched:
-        _verify_relaunched_gateways_alive(token, profiles, unmapped)
-    if relaunched:
-        print(f"\n  ✓ Restarting Windows gateway profile(s): {', '.join(relaunched)}")
-    if unmapped_relaunched:
-        lead = "" if relaunched else "\n"
+        verified = _verify_relaunched_gateways_alive(token, profiles, unmapped)
+    # Only vouch for a profile the per-profile liveness poll actually saw. A truthy launch only
+    # proves the watcher was spawned; naming a dead gateway in a ✓ is the #48820 user-visible lie.
+    if verified:
+        print(f"\n  ✓ Restarting Windows gateway profile(s): {', '.join(verified)}")
+    if unmapped_relaunched and not token.get("unmapped"):
+        lead = "" if verified else "\n"
         print(f"{lead}  ✓ Restarting {unmapped_relaunched} unmapped Windows gateway process(es)")
     # After the paused profiles are back: a dead-attested sibling that fails to cold-start must not
     # keep the profiles that WERE running from being relaunched.

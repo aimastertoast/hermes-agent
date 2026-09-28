@@ -1171,6 +1171,15 @@ export interface Translations {
     }
     about: {
       updates: string
+      /** Renderer-side toggles for the orchestrator's update modes (task 9
+       *  atoms: $updateSafeModeAuto, $updateAllowLocalAhead). */
+      updateModes: {
+        title: string
+        safeModeAutoLabel: string
+        safeModeAutoDescription: string
+        allowLocalAheadLabel: string
+        allowLocalAheadDescription: string
+      }
     }
     config: {
       minimizeToTrayTitle: string
@@ -3621,6 +3630,19 @@ export interface Translations {
     versionDetailsRuntimeExternal: string
     versionDetailsInstallId: string
     versionDetailsUncommittedChanges: string
+    /** Receipt-driven update status (Task 11): the overlay shows the
+     *  orchestrator's actual outcome instead of a generic "couldn't reach"
+     *  lie. These copy fields back the receipt's `outcome`, `error`, and
+     *  step detail straight into the user's status line. */
+    updateSucceeded: string
+    updateConflict: string
+    updateConflictResolve: string
+    updateFailed: string
+    /** Receipt-driven overlay actions (Task 13). The Acknowledge button
+     *  flips `$lastReceiptAcknowledged` and POSTs `/receipt/:id/ack`;
+     *  View receipt deep-links into the orchestrator's logged receipt. */
+    acknowledge: string
+    viewReceipt: string
   }
 
   /** The guided first run's pre-written opening line — banked, not generated,

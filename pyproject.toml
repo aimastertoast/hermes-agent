@@ -854,7 +854,7 @@ pm = ["lock.json", "artifact-mirror.json", "pyproject.toml", "uv.lock"]
 tools = ["bot_desktop/launcher.sh", "bot_desktop/wallpaper.png"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "hermes_cli/tests"]
 markers = [
   "integration: marks tests requiring external services (API keys, Modal, etc.)",
   "live: secrets-gated canaries against REAL LLM provider APIs (spends money; select with -m live)",

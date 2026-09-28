@@ -7,6 +7,7 @@ Extracted from ``hermes_cli.web_server``; helpers/state that tests monkeypatch o
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import secrets
 import subprocess
@@ -240,6 +241,29 @@ async def update_hermes():
         record_refusal_receipt(refusal)
         return response
 
+    # Force-requirement gate: same check the orchestrator runs, but here so
+    # the user gets immediate feedback instead of waiting for the spawned
+    # subprocess to start, run preflight, and then refuse. Honors the desktop
+    # ``$updateAllowLocalAhead`` toggle (a user-armed bypass returns None).
+    from hermes_cli.update_contract import evaluate_update_force_requirement
+
+    project_root = _server_path("PROJECT_ROOT")
+    hermes_home = Path(os.environ.get("HERMES_HOME") or project_root.parent)
+    try:
+        force_refusal = evaluate_update_force_requirement(project_root, home=hermes_home)
+    except Exception:
+        # The orchestrator re-runs this; fail open here so a transient read
+        # error doesn't 500 the user's "Update Now" click.
+        force_refusal = None
+    if force_refusal is not None:
+        response = _update_refused(
+            _UPDATE_REFUSAL_ERROR_CODES.get(force_refusal.code, force_refusal.code),
+            force_refusal.message,
+            force_refusal.update_command,
+        )
+        record_refusal_receipt(force_refusal)
+        return response
+
     existing = _ACTION_PROCS.get("hermes-update")
     if existing is not None and existing.poll() is None:
         response = {"ok": True, "pid": existing.pid, "name": "hermes-update", "already_running": True}
@@ -393,48 +417,97 @@ async def get_action_status(name: str, lines: int = 200):
 
 
 def _read_latest_receipt() -> Optional[Dict[str, Any]]:
-    """Latest update receipt, or None on any failure (never raises)."""
+    """Latest pipeline receipt as a JSON-ready dict, or None on any failure.
+
+    Thin pass-through to :func:`read_latest_pipeline_receipt_dict` so the
+    route stays focused on the HTTP contract; the dataclass-to-dict
+    conversion and path-traversal validation live with the storage layer
+    where they can be tested without the FastAPI stack.
+
+    Honors the active ``HERMES_HOME`` set by ``_config_profile_scope`` so
+    profile-tagged requests (``?profile=X``) read from the target
+    profile's home, matching the desktop's ``profileScoped()`` convention.
+    """
     try:
-        from hermes_cli.update_receipt import read_latest_receipt
-        return read_latest_receipt() or None
+        from hermes_constants import get_hermes_home
+        from hermes_cli.update_receipt import read_latest_pipeline_receipt_dict
+
+        return read_latest_pipeline_receipt_dict(get_hermes_home())
     except Exception:
         return None
 
 
 def _latest_update_receipt_summary() -> Optional[Dict[str, Any]]:
-    """Compact summary of the latest receipt (written by EVERY ``hermes update`` run,
-    incl. refused/failed), or None; never raises. Steps/skips stay in the full endpoint.
+    """Compact summary derived from the pipeline receipt.
 
-    Phase-1 bullet 3 (#91277): the receipt (written by EVERY ``hermes update`` run since #91283, including
-    refused and failed ones, with a ``latest.json`` pointer) is the durable success signal the Desktop and
-    dashboard should read instead of inferring outcomes from liveness probes across the update's stop/start
-    gap (#81193, #87359).
+    Delegates to :func:`latest_pipeline_receipt_summary` (single source of
+    truth — both the route and any future server-side consumers share the
+    same field set). ``None`` when no pipeline receipt exists yet.
+
+    Phase-1 bullet 3 (#91277): the durable receipt is the source of truth
+    the Desktop reads instead of inferring outcomes from liveness probes
+    across the update's stop/start gap (#81193, #87359).
     """
-    receipt = _read_latest_receipt()
-    if not receipt:
-        return None
     try:
-        post = receipt.get("post_update") or {}
-        return {
-            **{k: receipt.get(k) for k in ("outcome", "started_at", "finished_at")},
-            "pre_sha": (receipt.get("pre_update") or {}).get("sha"),
-            "post_sha": post.get("sha"), "post_version": post.get("version"),
-            "fleet_states": sorted({str(e.get("state")) for e in receipt.get("fleet") or [] if isinstance(e, dict)}),
-        }
+        from hermes_constants import get_hermes_home
+        from hermes_cli.update_receipt import latest_pipeline_receipt_summary
+
+        return latest_pipeline_receipt_summary(get_hermes_home())
     except Exception:
         return None
 
 
 @status_router.get("/api/hermes/update/receipt")
-async def get_update_receipt():
-    """The FULL latest update receipt (steps, skips, gateway restart outcome, fleet
-    matrix) plus a compact ``summary``; 404 when no update has run since receipts landed.
-    Clients read this instead of inferring success from backend liveness, which misread
-    the update's own restart gap as a failed update/boot.
+async def get_update_receipt(profile: Optional[str] = None):
+    """The FULL latest update receipt (steps, pre/post snapshots, backup ref,
+    force-check verdict) plus a compact ``summary``; 404 when no update has
+    run since receipts landed. Clients read this instead of inferring
+    success from backend liveness, which misread the update's own restart
+    gap as a failed update/boot.
+
+    Profile-scoped (``?profile=X``): each profile owns its own
+    ``HERMES_HOME``, so the target profile's receipts are invisible from
+    the dashboard's home. Honors the desktop's ``profileScoped()``
+    convention by flipping ``HERMES_HOME`` via ``_config_profile_scope``
+    for the duration of the read.
+
+    Reads from ``<home>/update_receipts/`` — the durable record written
+    by the orchestrator's 7-step pipeline. The legacy
+    ``<home>/logs/update_receipts/latest.json`` path is a separate system
+    (fleet-update / refusal-receipt streams) and is not served here.
 
     See #81193, #87359, #91277.
     """
-    receipt = _read_latest_receipt()
+    with _config_profile_scope(profile):
+        receipt = _read_latest_receipt()
+        summary = _latest_update_receipt_summary()
     if not receipt:
         raise HTTPException(status_code=404, detail="No update receipt found (no `hermes update` run recorded).")
-    return {"receipt": receipt, "summary": _latest_update_receipt_summary()}
+    return {"receipt": receipt, "summary": summary}
+
+
+@status_router.post("/api/hermes/update/receipt/{receipt_id}/ack")
+async def acknowledge_update_receipt(receipt_id: str, profile: Optional[str] = None):
+    """Mark a durable receipt as acknowledged by id.
+
+    Mirrors the desktop's ``acknowledgeReceipt`` API call. Profile-scoped
+    for the same reason as ``get_update_receipt`` — the receipt lives in
+    the target profile's home, and the dashboard's home may point at a
+    different one. Returns ``{"ok": True}`` on success (idempotent — a
+    second ack is a no-op) and ``{"ok": False}`` when the receipt id is
+    unknown or fails the path-traversal guard in
+    ``acknowledge_pipeline_receipt``.
+
+    The ``receipt_id`` is URI-decoded by FastAPI from the path parameter,
+    so any encoding the desktop's ``encodeURIComponent`` added is
+    reversed before the path-traversal regex (16 lowercase hex chars) runs.
+    """
+    with _config_profile_scope(profile):
+        try:
+            from hermes_constants import get_hermes_home
+            from hermes_cli.update_receipt import acknowledge_pipeline_receipt
+
+            ok = acknowledge_pipeline_receipt(get_hermes_home(), receipt_id)
+        except Exception:
+            ok = False
+    return {"ok": ok}

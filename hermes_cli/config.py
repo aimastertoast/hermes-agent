@@ -53,6 +53,9 @@ from hermes_cli.config_read_errors import (
     _yaml_error_location)
 
 logger = logging.getLogger(__name__)
+# ``log`` is the save_config G1 guard rail's logger (re-preserve warnings); aliased to the
+# same module logger so callers can filter on either name.
+log = logger
 
 
 def is_uv_tool_install() -> bool:
@@ -72,6 +75,11 @@ def format_unsupported_install_warning(method: str) -> str:
 
 class InvalidUserConfigError(RuntimeError):
     """Raised when a run that cannot repair config finds invalid user YAML."""
+
+
+class ConfigWriteGuardError(RuntimeError):
+    """A config write lost user-data keys despite the re-preservation guard;
+    config.yaml was restored to its pre-write contents."""
 
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -1311,16 +1319,20 @@ def warn_deprecated_cwd_env_vars() -> None:
         sys.stderr.write("\n".join(lines) + "\n\n")
 
 
-def _persist_migration(config: Dict[str, Any]) -> None:
+def _persist_migration(config: Dict[str, Any], removed_keys: Optional[Set[str]] = None) -> None:
     """Persist a migrated config under THE migration write invariant: a migration may only
     persist values that DIFFER from the schema default, plus explicit removals/renames of user
     data. Every migration step MUST write through here (``save_config`` with default-stripping
-    ON, no ``merge_existing``) so the invariant cannot regress one migration at a time. A migration
-    is Hermes' own write, never a user turning a feature off."""
+    ON, no ``merge_existing``) so the invariant cannot regress one migration at a time.
+
+    ``removed_keys`` declares the top-level user-data keys this step intentionally pops
+    (e.g. a rename like custom_providers → providers). Any top-level user-data key present on
+    disk but absent from the migrated config AND absent from ``removed_keys`` triggers the G1
+    guard: it is re-preserved with a WARNING, so an accidental drop cannot go silently."""
     from hermes_cli.observability.shared_metrics_disabled import hermes_applied_write
 
     with hermes_applied_write():
-        save_config(config)
+        save_config(config, removed_keys=removed_keys)
 
 
 def _prompt_and_save_env(name: str, info: Dict[str, Any], prompt: str, results: Dict[str, Any]) -> bool:
@@ -1727,19 +1739,31 @@ def _preserve_env_ref_templates(current, raw, loaded_expanded=None):
     return current
 
 
-def _explicit_config_paths(config: Dict[str, Any]) -> Set[Tuple[str, ...]]:
-    """Leaf paths explicitly present in a RAW (un-normalized) config, so values injected by
-    normalisation are never mistaken for user-set ones. Feeds ``_strip_default_values``."""
+def _explicit_config_paths(
+    config: Dict[str, Any], defaults: Dict[str, Any] = DEFAULT_CONFIG
+) -> Set[Tuple[str, ...]]:
+    """Leaf paths — plus unknown dict NODE paths — explicitly present in a RAW
+    (un-normalized) config, so values injected by normalisation are never mistaken
+    for user-set ones. Feeds ``_strip_default_values``.
+
+    A dict node is recorded only when the schema has no dict at that position
+    (e.g. the whole ``mcp_servers`` map): preserving the node then protects a
+    user-data subtree wholesale. Known-defaulted dict subtrees stay leaf-only —
+    a preserved node would otherwise also pin caller-injected default-equal
+    leaves inside it, defeating the strip pass."""
     paths: Set[Tuple[str, ...]] = set()
 
-    def _walk(value: Any, path: Tuple[str, ...]) -> None:
+    def _walk(value: Any, default: Any, path: Tuple[str, ...]) -> None:
         if isinstance(value, dict):
+            if path and not isinstance(default, dict):
+                paths.add(path)
+            default_children = default if isinstance(default, dict) else {}
             for key, child in value.items():
-                _walk(child, path + (key,))
+                _walk(child, default_children.get(key), path + (key,))
         elif path:
             paths.add(path)
 
-    _walk(config, ())
+    _walk(config, defaults, ())
     return paths
 
 
@@ -2050,16 +2074,104 @@ def require_readable_config_before_write(config_path: Optional[Path] = None) -> 
     return loaded
 
 
-def atomic_config_write(config_path: Path, data: Dict[str, Any], *, extra_content_on_create: Optional[str] = None) -> None:
-    """THE ``config.yaml`` writer: fail-closed (``require_readable_config_before_write``) and
-    comment-preserving (ruamel round-trip merge of *data* onto the on-disk document). Every code
-    path that persists a config.yaml — ``save_config``, ``config set``, migrations, plugin
-    bookkeeping, gateway/TUI RPCs, auth resets — goes through here; a PyYAML dump of a config
-    path anywhere else is rejected by ``scripts/check_config_yaml_writers.py`` (#92554)."""
+def _config_write_caller() -> str:
+    """file:line name of the first caller of a config writer outside this module.
+
+    Both writers that report through the G1 guard (``save_config`` and
+    ``atomic_config_write``) are reached directly and through internal wrappers
+    (e.g. ``_persist_migration``); a fixed frame depth would attribute the guard to
+    the wrapper (itself in this file) instead of the real caller, so walk past
+    every frame in this file."""
+    this_file = os.path.abspath(__file__)
+    frame = sys._getframe(2)
+    while frame is not None and os.path.abspath(frame.f_code.co_filename) == this_file:
+        frame = frame.f_back
+    if frame is None:
+        return "<unknown>"
+    return f"{frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}"
+
+
+def atomic_config_write(
+    config_path: Path, data: Dict[str, Any], *, extra_content_on_create: Optional[str] = None,
+    removed_keys: Optional[Set[str]] = None,
+) -> None:
+    """THE ``config.yaml`` writer: fail-closed (``require_readable_config_before_write``),
+    comment-preserving (ruamel round-trip merge of *data* onto the on-disk document) and
+    G1-guarded. Every code path that persists a config.yaml — ``save_config``, ``config set``,
+    migrations, plugin bookkeeping, gateway/TUI RPCs, auth resets — goes through here; a PyYAML
+    dump of a config path anywhere else is rejected by ``scripts/check_config_yaml_writers.py``
+    (#92554).
+
+    The G1 guard lives HERE rather than in ``save_config``: ~17 production writers call this
+    function directly (``hermes login``, ``doctor_config``, ``credential_lifecycle``, the
+    Telegram adapter, the gateway slash commands, profile seeding, …) and while the guard was
+    ``save_config``-local every one of those writers silently dropped any user-data root key its
+    partial dict omitted — the exact 2026-09-24 loss of a whole ``mcp_servers`` map. A writer
+    surrenders a key by naming it in ``removed_keys``; otherwise omission means "keep what is on
+    disk", and a warning names the real caller.
+    """
     from utils import atomic_roundtrip_yaml_save
 
     _refuse_failed_read(config_path, data)
+
+    # Capture the caller once: the helper walks out of this module, so the
+    # re-preserve warning and the post-write invariant name the same real caller.
+    guard_caller = _config_write_caller()
+    removed = {str(k) for k in (removed_keys or ())}
+    raw_before = require_readable_config_before_write(config_path)
+    protected = set(raw_before) - set(data) - set(DEFAULT_CONFIG) - removed
+    if protected:
+        for key in sorted(protected):
+            log.warning(
+                "atomic_config_write: incoming config omitted user-data key %r present on disk; "
+                "re-preserving it. If removal is intentional, pass removed_keys={%r}. "
+                "(caller: %s)", key, key, guard_caller)
+        # Rebind, never mutate: ``data`` is the caller's dict.
+        data = {**data, **{key: copy.deepcopy(raw_before[key]) for key in protected}}
+
+    pre_bytes = config_path.read_bytes() if config_path.exists() else None
     atomic_roundtrip_yaml_save(config_path, data, extra_content_on_create=extra_content_on_create)
+
+    # G1 post-write invariant: the file on disk must still carry every user-data
+    # root key it carried before the write. Any missing key is a defect somewhere
+    # below this function — restore and fail loudly. A verification read that itself
+    # fails leaves the result unprovable, so it is rolled back too: a refused write
+    # never leaves a changed file behind.
+    try:
+        post_raw = require_readable_config_before_write(config_path)
+    except BaseException:
+        if pre_bytes is not None:
+            _atomic_restore_pre_bytes(config_path, pre_bytes)
+        _RAW_CONFIG_CACHE.pop(str(config_path), None)
+        raise
+    expected = set(raw_before) - removed - set(DEFAULT_CONFIG)
+    missing = expected - set(post_raw)
+    if missing:
+        if pre_bytes is not None:
+            _atomic_restore_pre_bytes(config_path, pre_bytes)
+        _RAW_CONFIG_CACHE.pop(str(config_path), None)
+        raise ConfigWriteGuardError(
+            f"config write lost user-data key(s) {sorted(missing)!r}; "
+            "config.yaml was restored to its pre-write contents "
+            f"(caller: {guard_caller})")
+
+
+def _atomic_restore_pre_bytes(config_path: Path, pre_bytes: bytes) -> None:
+    """Atomically put pre-write bytes back (tmp file + rename), then secure."""
+    fd, tmp_path = tempfile.mkstemp(dir=str(config_path.parent), suffix=".tmp", prefix=".cfg_guard_")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(pre_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, config_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    _secure_file(config_path)
 
 
 def load_config() -> Dict[str, Any]:
@@ -2450,7 +2562,8 @@ def _commented_sections_for_save(normalized: Dict[str, Any]) -> Optional[str]:
 
 def save_config(
     config: Dict[str, Any], *, strip_defaults: bool = True,
-    preserve_keys: Optional[Set[Tuple[str, ...]]] = None, merge_existing: bool = False):
+    preserve_keys: Optional[Set[Tuple[str, ...]]] = None, merge_existing: bool = False,
+    removed_keys: Optional[Set[str]] = None):
     """Save configuration to ~/.hermes/config.yaml.
     Schema defaults are not written unless the user explicitly set them (the path exists in the
     raw config before normalisation), so config.yaml is never contaminated with defaults that
@@ -2464,6 +2577,7 @@ def save_config(
         config_path = get_config_path()
         _refuse_failed_read(config_path, config)
         config = _strip_managed_keys_for_save(config)
+        removed = {str(k) for k in (removed_keys or ())}
 
         ensure_hermes_home()
         # Explicit user paths come from the RAW dict BEFORE normalisation (which may inject
@@ -2487,7 +2601,12 @@ def save_config(
             effective_preserve_keys = _explicit_config_paths(_raw_for_paths) | set(preserve_keys or ())
             normalized = _strip_default_values(normalized, DEFAULT_CONFIG, preserve_keys=effective_preserve_keys)
 
-        atomic_config_write(config_path, normalized, extra_content_on_create=_commented_sections_for_save(normalized))
+        # G1 guard rail (re-preserve + post-write invariant) lives in
+        # ``atomic_config_write`` so every direct writer is covered too; all
+        # ``save_config`` owes it is the explicit ``removed_keys`` pass-through.
+        atomic_config_write(config_path, normalized,
+                            extra_content_on_create=_commented_sections_for_save(normalized),
+                            removed_keys=removed)
         _secure_file(config_path)
         _RAW_CONFIG_CACHE.pop(str(config_path), None)
         _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(current_normalized)
@@ -3517,11 +3636,20 @@ def _exit_invalid(msg: str) -> None:
     sys.exit(1)
 
 
-def _write_user_config(config_path: Path, user_config: Dict[str, Any]) -> None:
-    """Write only the user's raw config back (never the merged defaults)."""
+def _write_user_config(config_path: Path, user_config: Dict[str, Any], *,
+                       removed_keys: Optional[Set[str]] = None) -> None:
+    """Write only the user's raw config back (never the merged defaults).
+
+    ``removed_keys`` surrenders root sections the caller deliberately dropped (see the
+    G1 guard in :func:`atomic_config_write`); without it an omitted key is re-preserved."""
     ensure_hermes_home()
+    from functools import partial
+
     from hermes_cli.observability.shared_metrics_disabled import recording_raw_config_write
-    recording_raw_config_write(config_path, user_config, atomic_config_write)
+    # recording_raw_config_write invokes the writer with the two positional args it is handed,
+    # so removed_keys rides along as a bound keyword rather than being dropped on the floor.
+    recording_raw_config_write(
+        config_path, user_config, partial(atomic_config_write, removed_keys=removed_keys))
 
 
 def _print_unknown_key_notice(key: str, suggestion: Optional[str]) -> None:
@@ -3783,7 +3911,14 @@ def unset_config_value(key: str):
     if not removed:
         _exit_invalid(f"Config key not set: {key}")
 
-    _write_user_config(config_path, user_config)
+    # ``_unset_nested`` pops the whole root section when the key names one
+    # (``hermes config unset mcp_servers``). Surrender it explicitly — otherwise
+    # the G1 guard reads the omission as "keep what is on disk", re-preserves the
+    # section, and the unset silently does nothing.
+    dropped = {candidate.split(".", 1)[0]
+               for candidate in (key, legacy_key) if candidate
+               and candidate.split(".", 1)[0] not in user_config}
+    _write_user_config(config_path, user_config, removed_keys=dropped)
     print(f"✓ Unset {key} from {config_path}")
 
 

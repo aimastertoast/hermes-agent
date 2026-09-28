@@ -1409,7 +1409,16 @@ export const en: Translations = {
       driverHealth: 'Driver health'
     },
     about: {
-      updates: 'Updates'
+      updates: 'Updates',
+      updateModes: {
+        title: 'Update behavior',
+        safeModeAutoLabel: 'Auto-apply safe updates',
+        safeModeAutoDescription:
+          'When enabled, updates that don’t change your schema, config, or MCP servers are applied automatically.',
+        allowLocalAheadLabel: 'Allow Update Now when local is ahead',
+        allowLocalAheadDescription:
+          'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
+      }
     },
     config: {
       minimizeToTrayTitle: 'Minimize to tray',
@@ -4344,7 +4353,20 @@ export const en: Translations = {
     versionDetailsRuntimeEmbedded: 'Embedded runtime',
     versionDetailsRuntimeExternal: 'External (uses the machine runtime)',
     versionDetailsInstallId: 'Install ID',
-    versionDetailsUncommittedChanges: 'uncommitted changes'
+    versionDetailsUncommittedChanges: 'uncommitted changes',
+    // Receipt-driven update status (Task 11). The placeholder strings match
+    // the orchestrator receipt shape so the overlay shows the actual outcome
+    // instead of a generic "couldn't reach the update server" lie.
+    updateSucceeded: 'Update applied successfully (state.db @ {sha}).',
+    updateConflict: 'Update conflict in: {files}',
+    updateConflictResolve:
+      'Your local commits are on branch {backup}. Run `hermes update --resolve` to finish.',
+    updateFailed: 'Update {outcome}: {error}',
+    // Receipt-driven overlay actions (Task 13). Acknowledge closes the
+    // receipt-driven error pane for this install; View receipt deep-links
+    // into the orchestrator's logged receipt for the diagnostic trail.
+    acknowledge: 'Acknowledge',
+    viewReceipt: 'View receipt'
   },
 
   handoffTour: {

@@ -111,4 +111,10 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         help="Update code and dependencies but defer the fleet restart. Use for updates "
              "running inside a gateway cgroup, then restart gateways separately.",
     )
+    update_parser.add_argument(
+        "--use-orchestrator", action="store_true", default=False,
+        help="Route the update through the new 7-step orchestrator (hermes_cli.update_orchestrator). "
+             "Default off: the legacy update path remains active. Off by default while the orchestrator "
+             "is being rolled out behind a flag.",
+    )
     update_parser.set_defaults(func=cmd_update)

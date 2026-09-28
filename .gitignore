@@ -120,6 +120,10 @@ apps/desktop/release/
 # stage-and-swap Desktop rebuild output (#86443); removed after the swap, but
 # a killed build must not leave the checkout dirty
 apps/desktop/.staging-*/
+# electron-builder temp work dirs (same failure mode as .staging-* above: the
+# build names a fresh suffix each run and only cleans it on success, so an
+# interrupted build leaves one behind)
+apps/desktop/.dist-build-*/
 *.tsbuildinfo
 
 # Web UI assets — synced from @nous-research/ui at build time via
@@ -225,6 +229,7 @@ docs/superpowers/*
 /slack_tokens.json
 /hook_outputs/
 /hooks/
+/.cache/
 /cache/
 /checkpoints/
 /pending_messages/
@@ -311,11 +316,5 @@ native/fts5_cjk/*.so
 # Disposable profile created by scripts/probe_active_session_exclusivity.py
 .probe-home/
 
-# Bundle/build scratch roots (scripts/bundles/, scripts/build/frontend-common.mjs)
-.build/
-.cache/
-
-# PM lockfile advisory lock; kept in place so waiting writers share its inode
-/pm/.lock.json.lock
-
-apps/desktop/.dist-build*
+# Agent QA report debris (2026-09-20): untracked files hard-block the parked-branch update guard
+qa-reports/

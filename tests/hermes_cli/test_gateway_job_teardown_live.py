@@ -281,8 +281,9 @@ class TestResumeVerificationLive:
     """The user-visible lie: '✓ Restarting' printed for a dead gateway."""
 
     def test_dead_relaunch_is_not_reported_as_success(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
-        (tmp_path / "home").mkdir(parents=True, exist_ok=True)
+        home = tmp_path / "home"
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        home.mkdir(parents=True, exist_ok=True)
 
         import hermes_cli.gateway as gateway
         import hermes_cli.main as hm
@@ -290,6 +291,11 @@ class TestResumeVerificationLive:
 
         # Peripheral only: don't regenerate launcher scripts into the temp home.
         monkeypatch.setattr(hm, "_refresh_windows_gateway_launchers", lambda: None)
+        # The per-profile liveness poll resolves the profile name through
+        # get_profile_dir, and "default" means the REAL default home regardless of
+        # HERMES_HOME — point it at the temp home so this live test never reads the
+        # live install (tests/home_io_guard.py enforces that).
+        monkeypatch.setattr("hermes_cli.profiles.get_profile_dir", lambda name: home)
 
         # Real relaunch chain, real watcher, real spawn — but the respawned
         # "gateway" exits immediately, standing in for the Job-Object
@@ -319,8 +325,9 @@ class TestResumeVerificationLive:
             "builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))
         )
         try:
-            with pytest.raises(RuntimeError, match="not verified alive"):
-                _resume_windows_gateways_after_update(token)
+            # Never raises: the resume is atexit-safe and a relaunch failure must not
+            # change the update's exit code. It reports instead.
+            _resume_windows_gateways_after_update(token)
         finally:
             monkeypatch.setattr("builtins.print", real_print)
 
@@ -330,3 +337,5 @@ class TestResumeVerificationLive:
             f"(#48820). Printed:\n{text}"
         )
         assert "could not be verified" in text
+        # The dead profile stays on the token so reconciliation still surfaces it.
+        assert "default" in (token.get("profiles") or {})
