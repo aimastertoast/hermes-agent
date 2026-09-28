@@ -6,7 +6,12 @@ import { saveHermesConfig } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
 import { $settingsRequestProfile } from '@/store/settings-scope'
-import { CHAT_FONT_SUGGESTIONS, normalizeChatFontFamily, setChatFontFamilyFromConfig } from '@/themes/chat-font'
+import {
+  CHAT_FONT_SUGGESTIONS,
+  normalizeChatFontFamily,
+  resolveChatFontFamily,
+  setChatFontFamilyFromConfig
+} from '@/themes/chat-font'
 import type { HermesConfigRecord } from '@/types/hermes'
 
 import { hermesConfigCacheWriter, useHermesConfigRecord } from '../hooks/use-config-record'
