@@ -734,6 +734,27 @@ def _source_update_channel(args=None, *, channel=None, branch_explicit=False) ->
     return resolve_update_channel(config, _m().PROJECT_ROOT)
 
 
+def _remote_has_branch(root: Path, branch: str) -> bool:
+    """True iff ``origin`` actually has ``branch``.
+
+    A fork install sits on a branch that exists on no remote, and the desktop
+    hands that branch to the updater as ``--branch`` (it reads it from the
+    install stamp). Fetching it dies with "couldn't find remote ref", so ask
+    the remote before trusting the flag. ``ls-remote --exit-code`` exits 2 when
+    no ref matches; any other non-zero (offline, auth) is also "not proven" —
+    the caller's fallback is the same either way.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-remote", "--exit-code", "--heads", "origin", branch],
+            capture_output=True, text=True, check=False,
+            timeout=30, **_no_prompt_git_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False, channel=None):
     """Implement ``hermes update --check``: fetch and report without installing.
 
@@ -1626,7 +1647,16 @@ def _cmd_update_impl(args, gateway_mode: bool):
     release_sha = None
     target_repository = None
     selected_channel = _source_update_channel(args)
-    if not getattr(args, "branch", None):
+    # A fork install's branch is local-only, and the desktop passes it as
+    # --branch; fetching it fails with "couldn't find remote ref". What the user
+    # wants is the channel's own branch merged INTO the local one -- which is
+    # exactly what the no---branch path below already does, and what the CLI
+    # does today. So treat an unreachable --branch as if it had not been given.
+    requested_branch = getattr(args, "branch", None)
+    if requested_branch and not _remote_has_branch(_m().PROJECT_ROOT, branch):
+        print(f"  (branch {branch} is local-only; updating from the {selected_channel} channel instead)")
+        requested_branch = None
+    if not requested_branch:
         from hermes_cli.release_channels import retrying_reads
         from hermes_cli.source_releases import resolve_source_target
 

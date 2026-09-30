@@ -501,3 +501,40 @@ def test_source_retirement_rejects_invalid_archive_constraints(source, retired_c
     (fixture.archive / f"releases/channels/{fixture.name}.json").write_bytes(canonical_json(fixture.retired))
     with pytest.raises(ValueError):
         source_releases.resolve_source_target(fixture.name, ["git"], source.root)
+
+
+def test_local_only_branch_flag_falls_back_to_the_channel_branch(source, monkeypatch, capsys):
+    """A fork install sits on a branch no remote has, and the desktop hands that
+    branch to the updater as ``--branch`` (it reads it from the install stamp).
+    Fetching it dies with "couldn't find remote ref". The update the user wants
+    is the channel's own branch merged INTO the local one -- exactly what the
+    no-``--branch`` path already does, and what the CLI does today."""
+    git(source.root, "config", "user.name", "Fork Fixture")
+    git(source.root, "config", "user.email", "fork@example.invalid")
+    # The real fork install sets this; without it the guard defaults to "switch"
+    # and would switch the checkout to main, hiding what this test is about.
+    (source.home / "config.yaml").write_text(
+        "updates:\n  parked_branch_strategy: update_in_place\n")
+    git(source.root, "checkout", "-b", "local-main-clean")
+    (source.root / "fork.txt").write_text("fork work\n")
+    git(source.root, "add", "-A")
+    git(source.root, "commit", "-m", "fork work")
+    fork_tip = git(source.root, "rev-parse", "HEAD")
+    requests = []
+
+    def completion(request):
+        requests.append(deepcopy(request))
+        return {"exit_code": 0, "receipt": None, "windows_resume": None}
+
+    monkeypatch.setattr(update_cmd, "run_completion", completion)
+    monkeypatch.setattr(update_cmd, "_write_fleet_restart_pending_marker", lambda **kw: None)
+    args = source.parser.parse_args(["update", "--yes", "--branch", "local-main-clean"])
+    update_cmd._cmd_update_impl(args, False)
+
+    out = capsys.readouterr().out
+    assert "couldn't find remote ref" not in out
+    # The fork's own commit survives: origin/main is merged INTO the local branch.
+    assert git(source.root, "rev-parse", "--abbrev-ref", "HEAD") == "local-main-clean"
+    git(source.root, "merge-base", "--is-ancestor", fork_tip, "HEAD")  # raises unless merged
+    assert (source.root / "content.txt").read_text() == "unpublished"
+    assert len(requests) == 1
