@@ -144,6 +144,7 @@ def _branch_tip(repository: str | None, branch: str, root: Path, git: str,
     # A successful empty ref advertisement alone proves a branch was deleted.
     # GitHub 404 can also mean a private repository: it must not heal a branch.
     failure = None
+    absent = False
     if repository:
         from hermes_cli.github_api import describe_github_failure, github_token
         try:
@@ -152,10 +153,19 @@ def _branch_tip(repository: str | None, branch: str, root: Path, git: str,
         except Exception as exc:
             sha = None
             failure = describe_github_failure(exc, authenticated=github_token() is not None)
+            # 422 ("No commit found for SHA: <ref>") is only sent once GitHub has
+            # resolved the repository, so unlike 404 -- which a private repository
+            # also returns -- it does mean this ref is gone. Trusting it keeps a
+            # slow link from undoing the answer: when `ls-remote` times out it
+            # reports the branch as still present, and every caller then reads
+            # a long-deleted branch as reachable.
+            absent = isinstance(exc, urllib.error.HTTPError) and exc.code == 422
         if _is_full_sha(sha):
             return sha, False, None
         if failure is None:
             failure = "api.github.com returned no commit for the branch."
+        if absent:
+            return None, True, None
         if branch == "main" and remote == "origin":
             return None, False, failure
     result = _git_run(["ls-remote", "--exit-code", "--heads", remote, f"refs/heads/{branch}"],
@@ -350,12 +360,17 @@ def _check_branch(result: dict, co: _Checkout, selected_branch: str, *,
     target, missing, failure = _branch_tip(co.repository, selected_branch, co.root, co.git, remote)
     reason = _unhealable_reason(co, selected_branch) if missing and selected_branch != "main" else None
     if reason:
+        # The pin stays -- never heal away work the remote never had -- but the
+        # comparison target becomes main: `hermes update` merges origin/main into
+        # this branch in place, so that is what "behind" has to mean. Returning an
+        # error here made the Desktop render "couldn't reach the update server"
+        # (it maps every error to that line) on every check of a fork install.
         detail = ("has never been pushed" if reason == "never-pushed"
                   else "is gone from the remote but has commits that are not in main")
-        result.update(error="branch-local-only", localOnly=True,
+        result.update(localOnly=True,
                       message=f"Branch '{selected_branch}' {detail}; keeping it instead of switching to main.")
-        return
-    if missing and selected_branch != "main":
+        target, _, failure = _branch_tip(co.repository, "main", co.root, co.git, remote if co.embedded else "origin")
+    elif missing and selected_branch != "main":
         result["branch"] = "main"
         if heal:
             _heal_deleted_branch(*heal)
