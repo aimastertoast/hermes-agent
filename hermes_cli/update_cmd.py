@@ -196,12 +196,13 @@ from hermes_cli.update_cmd_git import (  # noqa: F401
     OFFICIAL_REPO_URL, OFFICIAL_REPO_URLS, SKIP_UPSTREAM_PROMPT_FILE, _ORPHAN_RESCUE_REFS_TO_KEEP,
     _ORPHAN_RESCUE_REF_MAX_AGE_DAYS, _add_upstream_remote, _assess_parked_branch_switch,
     _branch_head_label, _branch_head_suffix, _classify_fetch_failure, _count_commits_between,
-    _discard_lockfile_churn, _ensure_non_trampoline_git, _get_origin_url, _git_is_trampoline,
-    _has_upstream_remote, _is_fork, _locate_real_git, _mark_skip_upstream_prompt,
-    _normalize_managed_eol, _park_detached_head, _portable_git_candidates, _print_fetch_failure,
-    _print_parked_branch_kept_notice, _print_parked_branch_skip_warning,
-    _prune_orphan_rescue_refs, _should_skip_upstream_prompt, _sync_fork_with_upstream,
-    _sync_with_upstream_if_needed)
+    _discard_lockfile_churn, _ensure_non_trampoline_git,
+    _get_origin_url, _git_is_trampoline, _has_upstream_remote, _is_fork, _locate_real_git,
+    _mark_skip_upstream_prompt, _normalize_managed_eol, _park_detached_head,
+    _portable_git_candidates, _print_fetch_failure, _print_parked_branch_kept_notice,
+    _print_parked_branch_skip_warning, _prune_orphan_rescue_refs, _should_skip_upstream_prompt,
+    _sync_fork_with_upstream, _sync_with_upstream_if_needed, _with_transient_retry,
+    is_transient_fetch_failure)
 from hermes_cli.update_cmd_maint import (  # noqa: F401
     _PRE_UPDATE_SNAPSHOT_KEEP, _PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE, _clear_stale_sqlite_sidecars,
     _checkout_version, _ensure_acp_launcher, _ensure_fhs_path_guard, _finish_dashboard_update_cleanup,
@@ -369,22 +370,29 @@ def _record_snapshot_stage(args, snapshot_id) -> None:
 
 def _git_run(git_cmd, args, cwd=None, *, check=False, network=False):
     """Run git capturing utf-8 text (default cwd: checkout); ``network=True`` disables the
-    terminal prompt so an HTTP 401 fails fast instead of hanging, and bounds the wait."""
-    try:
-        return subprocess.run(
-            git_cmd + args, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", check=check,
-            **({"timeout": NETWORK_GIT_TIMEOUT_SECONDS, **_no_prompt_git_kwargs()} if network else {}))
-    except subprocess.TimeoutExpired as exc:
-        # subprocess.run already killed the child; the checkout stays consistent because
-        # fetch writes to tmp_pack_* and only renames on success. Report as a failed run
-        # so every caller's existing stderr path prints one clear line.
-        result = subprocess.CompletedProcess(
-            exc.cmd, 124, stdout="",
-            stderr=f"git {args[0]} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s (a stalled remote, or a transfer too large for the limit)")
-        if check:
-            raise subprocess.CalledProcessError(124, exc.cmd, output="", stderr=result.stderr) from exc
-        return result
+    terminal prompt so an HTTP 401 fails fast instead of hanging, and bounds the wait.
+
+    A network command that fails transiently (rate limit, outage, dropped socket, or this
+    module's own 300s bound) is retried twice with the wait printed first: one blip must not
+    abort the whole update, and a retry must never read as a hang. Local commands never wait."""
+    def once():
+        try:
+            return subprocess.run(
+                git_cmd + args, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
+                text=True, encoding="utf-8", errors="replace", check=False,
+                **({"timeout": NETWORK_GIT_TIMEOUT_SECONDS, **_no_prompt_git_kwargs()} if network else {}))
+        except subprocess.TimeoutExpired as exc:
+            # subprocess.run already killed the child; the checkout stays consistent because
+            # fetch writes to tmp_pack_* and only renames on success. Report as a failed run
+            # so every caller's existing stderr path prints one clear line.
+            return subprocess.CompletedProcess(
+                exc.cmd, 124, stdout="",
+                stderr=f"git {args[0]} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s (a stalled remote, or a transfer too large for the limit)")
+
+    result = _with_transient_retry(once, label=f"git {args[0]}") if network else once()
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
+    return result
 
 
 def _heal_stale_shallow_checkout(repo_root: Path, branch: str) -> None:

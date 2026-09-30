@@ -6,6 +6,8 @@ test patches on ``update_cmd`` stay effective).
 """
 
 import logging
+import os
+import time
 from contextlib import suppress
 import subprocess
 import sys
@@ -20,6 +22,9 @@ _ORPHAN_RESCUE_REF_MAX_AGE_DAYS = 30
 
 _GIT_TEXT_KW = dict(capture_output=True, text=True, encoding="utf-8", errors="replace")
 _BAR = "=" * 68
+# ``status``/``cherry``/``rev-list`` are local calls that normally finish in well under a
+# second; this is pure backstop so none of them can hold the update open indefinitely.
+_LOCAL_GIT_TIMEOUT_SECONDS = 120
 _UPSTREAM_ADD_CMD = "git remote add upstream https://github.com/NousResearch/hermes-agent.git"
 
 
@@ -28,19 +33,34 @@ def _git_ok(git_cmd, args, cwd, **kw) -> bool:
     return _git_stdout(git_cmd, args, cwd, **kw) is not None
 
 
-def _git_run(git_cmd, args, cwd=None, *, check=False):
+def _git_run(git_cmd, args, cwd=None, *, check=False, env=None, timeout=None):
     """Run ``git_cmd + args`` and return the CompletedProcess.
 
     The updater's git runner: capture all output and decode as UTF-8 regardless of the
     Windows ANSI code page (#52649). ``check=True`` raises on non-zero exit.
+
+    ``env`` adds variables onto the inherited environment (it never replaces it) and
+    ``timeout`` bounds the call — both exist so a git that reaches back to the promisor
+    remote can't hold ``hermes update`` open forever. A timeout comes back as exit 124,
+    not as an exception, so callers keep one error path.
     """
-    return subprocess.run(
-        git_cmd + list(args),
-        cwd=cwd,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        check=check,
-    )
+    kwargs = dict(_GIT_TEXT_KW)
+    if env:
+        kwargs["env"] = {**os.environ, **env}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    try:
+        return subprocess.run(git_cmd + list(args), cwd=cwd, check=check, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            git_cmd + list(args), 124, stdout="",
+            stderr=f"git {args[0] if args else ''} timed out after {timeout}s",
+        )
+        if check:
+            raise subprocess.CalledProcessError(
+                124, result.args, output="", stderr=result.stderr
+            ) from exc
+        return result
 
 
 def _git_stdout(git_cmd, args, cwd, **kw) -> Optional[str]:
@@ -176,16 +196,36 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
             return False, "disabled"
     except Exception as exc:
         logger.debug("Could not read updates.auto_switch_parked_branch: %s", exc)
-    status = _git_run(git_cmd, ["status", "--porcelain"], cwd)
+    status = _git_run(git_cmd, ["status", "--porcelain"], cwd, timeout=_LOCAL_GIT_TIMEOUT_SECONDS)
     if status.returncode != 0:
         return False, "unverifiable"
     if status.stdout.strip():
         return False, "dirty"
-    cherry = _git_run(git_cmd, ["cherry", f"origin/{target_branch}"], cwd)
-    if cherry.returncode != 0:
+    # ``cherry`` computes patch-ids, so it reads trees/blobs — and in a treeless partial clone
+    # (promisor + filter=tree:0) a missing object makes git spawn a background fetch from the
+    # promisor remote with no timeout of its own, which held this update open for 98 minutes
+    # with no output. Commits are always local, so turn the lazy fetch off and, when patch-ids
+    # can't be computed at all, fall back to reachability: a clean checkout must still reach
+    # the target branch rather than being skipped as "unverifiable".
+    from hermes_cli._subprocess_compat import NO_LAZY_FETCH_ENV
+    cherry = _git_run(
+        git_cmd, ["cherry", f"origin/{target_branch}"], cwd,
+        env=NO_LAZY_FETCH_ENV, timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
+    )
+    if cherry.returncode == 0:
+        unmerged = [line for line in cherry.stdout.splitlines() if line.startswith("+")]
+        return True, f"unmerged:{len(unmerged)}" if unmerged else ""
+    reachable = _git_run(
+        git_cmd, ["rev-list", "--count", f"origin/{target_branch}..HEAD"], cwd,
+        env=NO_LAZY_FETCH_ENV, timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
+    )
+    if reachable.returncode != 0:
         return False, "unverifiable"
-    unmerged = [line for line in cherry.stdout.splitlines() if line.startswith("+")]
-    return True, f"unmerged:{len(unmerged)}" if unmerged else ""
+    try:
+        count = int(reachable.stdout.strip() or "0")
+    except ValueError:
+        return False, "unverifiable"
+    return True, f"unmerged:{count}" if count else ""
 
 
 _PARKED_SKIP_WHY = {
@@ -421,6 +461,80 @@ def _print_fetch_failure(stderr: str) -> None:
     print(_classify_fetch_failure(stderr))
     if stderr:
         print(f"  {stderr.splitlines()[0]}")
+
+
+# Every transient class below used to end `hermes update` on the first fetch attempt, so one
+# blip cost the user another click. The delays are the whole budget: one sleep per entry, so
+# ``len(delays) + 1`` attempts, each announced before it sleeps (a silent wait is the bug we
+# just spent 98 minutes diagnosing).
+_FETCH_RETRY_DELAYS_S = (10, 30)
+
+# Checked first: retrying these only delays the diagnosis the caller is about to print.
+_PERMANENT_FETCH_MARKERS = (
+    "Authentication failed",
+    "Permission denied (publickey)",
+    "Host key verification failed",
+    "Repository not found",
+    "not a git repository",
+    # Both reach us wrapped in "unable to access '<x>'" below, which IS transient for a URL —
+    # without these a misconfigured local path would be retried twice and then reported as a
+    # network outage.
+    "does not appear to be a git repository",
+    "No such file or directory",
+)
+
+_TRANSIENT_FETCH_MARKERS = (
+    "Could not resolve host",
+    "unable to access",
+    "Connection timed out",
+    "Operation timed out",
+    "Failed to connect",
+    "Could not connect to server",
+    "timed out",
+    "the remote end hung up unexpectedly",
+    "early EOF",
+    "RPC failed",
+    "SSL_ERROR",
+    # Matches _classify_fetch_failure, which calls this a GitHub outage and tells the
+    # user to try again in a few minutes — the retry layer must agree with its own message.
+    "could not read Username",
+)
+
+
+def is_transient_fetch_failure(stderr: str) -> bool:
+    """True when a later fetch attempt could plausibly succeed (rate limit, outage, network)."""
+    text = stderr or ""
+    if any(marker in text for marker in _PERMANENT_FETCH_MARKERS):
+        return False
+    if _has_http_code(text, "429", "500", "502", "503", "504") or "rate limit" in text.lower():
+        return True
+    return any(marker in text for marker in _TRANSIENT_FETCH_MARKERS)
+
+
+def _with_transient_retry(run, *, delays=_FETCH_RETRY_DELAYS_S, sleep=None, label="fetch"):
+    """Run ``run()`` up to ``1 + len(delays)`` times while its failure looks transient.
+
+    ``run() -> CompletedProcess``. The wait is printed *before* sleeping, so a retry never
+    reads as a hang, and a permanent cause (auth, not-found, bad local path) returns on the
+    first attempt with no wasted wait. Always returns the last result whatever its exit
+    code, so the caller's failure handling is untouched.
+
+    This wraps the git *runner*, not the fetch, so ``fetch_with_partial_clone_recovery``'s
+    pack-objects recovery still wraps every attempt: a git 2.53/2.54 crash (#124272) and a
+    dropped socket are different failures, and neither one double-retries the other.
+
+    ``sleep`` resolves at call time, not at def time — a default of ``time.sleep`` would
+    capture the function object and no test could substitute a no-op for it.
+    """
+    nap = time.sleep if sleep is None else sleep
+    result = run()
+    for delay in delays:
+        if result.returncode == 0 or not is_transient_fetch_failure(getattr(result, "stderr", "") or ""):
+            return result
+        print(f"  ⚠ {label} failed — retrying in {delay}s…")
+        nap(delay)
+        result = run()
+    return result
 
 
 def _probe_fork_bomb(argv: list) -> Optional[bool]:
