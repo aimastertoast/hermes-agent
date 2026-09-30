@@ -274,11 +274,7 @@ def _remove_mcp_server(name: str) -> bool:
     del servers[name]
     if not servers:
         config.pop("mcp_servers", None)
-        # G1 guard: popping the whole section is the intentional removal; declare it so the
-        # re-preserve guard doesn't resurrect the now-empty mcp_servers map.
-        save_config(config, removed_keys={"mcp_servers"})
-    else:
-        save_config(config)
+    save_config(config)
     return True
 
 
@@ -299,13 +295,9 @@ def _replace_mcp_servers(servers: Dict[str, dict]) -> Tuple[bool, List[str]]:
     config = load_config()
     if servers:
         config["mcp_servers"] = dict(servers)
-        save_config(config)
     else:
-        # An empty map is a DECLARED removal of the whole mcp_servers key —
-        # surrender it explicitly so the save_config guard does not
-        # re-preserve it (spec §3.1 step 3).
         config.pop("mcp_servers", None)
-        save_config(config, removed_keys={"mcp_servers"})
+    save_config(config)
     return True, []
 
 

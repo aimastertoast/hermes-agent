@@ -1,7 +1,8 @@
-"""G1 guard rail: the mcp.json editor's whole-map replace must state its
-deletion intent explicitly (``removed_keys``), or the Task-2 guard would
-re-preserve the map it is trying to clear — and a silent clear would be
-exactly the 2026-09-24 loss this whole component prevents."""
+"""The mcp.json editor owns the whole ``mcp_servers`` map.
+
+An empty map must clear the section, a populated one must replace it
+wholesale, and one bad entry must reject the entire save. A silent partial
+clear here is exactly the 2026-09-24 loss this path exists to prevent."""
 import yaml
 
 from hermes_cli.mcp_config import _replace_mcp_servers

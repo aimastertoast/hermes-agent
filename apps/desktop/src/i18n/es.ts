@@ -733,7 +733,7 @@ export const esOverrides = {
       'view.toggleProfileRail': 'Mostrar u ocultar la barra de perfiles',
       'view.toggleSimpleMode': 'Activar o desactivar el modo simple',
       'view.showFiles': 'Mostrar explorador de archivos',
-      'view.showBrowser': 'Abrir el navegador',
+      'view.showBrowser': 'Alternar navegador',
       'view.toggleHud': 'Alternar modo HUD',
       'hud.snapToPointer': 'Mover HUD al puntero (global, mientras el HUD esté abierto)',
       'view.showTerminal': 'Mostrar terminal',
@@ -3177,7 +3177,8 @@ export const esOverrides = {
     gatewayStopped: 'Gateway de mensajería detenido',
     hermesActiveSessions: (version, count) => `Hermes ${version} · Sesiones activas ${count}`,
     restartGateway: 'Reiniciar gateway',
-    openBrowser: 'Abrir navegador',
+    openBrowser: 'Alternar navegador',
+    toggleBrowser: 'Alternar navegador',
     gatewayRestartFailed: 'No se pudo reiniciar el gateway.',
     sharedGatewayRestartTitle: '¿Reiniciar el gateway compartido?',
     sharedGatewayRestartDescription: (bots: string) => `Todos los bots de este dispositivo se reconectan: ${bots}`,
@@ -5378,6 +5379,7 @@ export const esOverrides = {
     hideTabStrip: 'Ocultar pestañas',
     showStripTab: title => `Mostrar ${title}`,
     hideStripTab: title => `Ocultar ${title}`,
+    zoneMenuLabel: title => `Opciones de zona para ${title}`,
     lastTabKeptTitle: 'La última pestaña permanece',
     lastTabKeptBody:
       'Esta zona necesita al menos una pestaña visible. Muestra otra pestaña primero, o colapsa toda la barra lateral.',
@@ -5536,6 +5538,10 @@ export const esOverrides = {
           title: 'No se pudo conectar con el servicio de IA',
           body: (provider: string) =>
             `No se pudo conectar con ${provider} o no respondió a tiempo. Revisa tu conexión a internet y vuelve a intentarlo.`
+        },
+        no_reply: {
+          title: 'La respuesta no terminó',
+          body: 'Hermes terminó este turno sin respuesta. Reinténtalo para enviarla de nuevo.'
         },
         stream_drop: {
           title: 'La respuesta se cortó',
@@ -5719,14 +5725,9 @@ export const esOverrides = {
       placeholder: 'Escribe tu respuesta…',
       skip: 'Omitir',
       skipped: 'Omitido',
-      continueLabel: 'Continuar',
+      noAnswer: 'Sin respuesta',
       confirmAndContinueLabel: 'Confirmar y continuar',
-      answeredBadge: 'Respondido',
       questionProgress: (answered, total) => `${answered} de ${total} respondidas`,
-      lateAnswer: (question, choice) => `Con respecto a “${question}”: mi respuesta es ${choice}`,
-      lateAnswerTip: 'Redactar esta respuesta como mensaje de seguimiento',
-      lateAnswerHint:
-        'Este prompt ya no espera una respuesta. Elige una opción para redactarla como mensaje de seguimiento.',
       notDelivered:
         'Esta pregunta no llegó a la app, así que no se puede responder aquí. Pulsa Detener para terminar el turno y luego responde en el chat.'
     },
