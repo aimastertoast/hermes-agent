@@ -1726,7 +1726,13 @@ try {
         # against the pre-update snapshot BEFORE declaring success. The verifier
         # rolls back (git reset + config restore) and exits non-zero on failure;
         # the receipt's verification section carries the per-check detail.
-        $verifyStep = Invoke-HermesStep $pythonExe @("-m", "hermes_cli.update_verification") "post-update-verify"
+        # Resolve the runtime the way the ASAR verify step above does: $pythonExe is
+        # PM's bare store interpreter, which has no site-packages, so `import yaml`
+        # inside update_verification dies before any check runs. The launcher's
+        # command activates the dependency generation first.
+        $parityCommand = @(Get-HermesRuntimeCommand -InstallRoot $InstallRoot -Module 'hermes_cli.update_verification')
+        $parityArgs = @($parityCommand | Select-Object -Skip 1)
+        $verifyStep = Invoke-HermesStep $parityCommand[0] $parityArgs "post-update-verify"
         if ($verifyStep.Code -ne 0) {
             $manualAction = $true
             $manualMsg = "Update verification failed and the update was rolled back. See logs/update_receipts/ for the per-check detail, then run 'hermes update' again."
