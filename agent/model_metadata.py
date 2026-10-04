@@ -1640,7 +1640,12 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
         resp = client.post(f"{server_url}/api/show", json={"name": model})
         return _ollama_show_context(resp.json(), gguf_first=False) if resp.status_code == 200 else None
     def _model_detail_ctx(client) -> Optional[int]:
-        # LM Studio / vLLM / llama.cpp / Anthropic-compat proxies: /v1/models/{model}
+        # LM Studio / vLLM / llama.cpp / Anthropic-compat proxies: /v1/models/{model}.
+        # Skipped for unrecognised servers (server_type None, e.g. LiteLLM proxies): they commonly
+        # gate this endpoint behind admin auth (#25848) and log an ERROR per probe even though the
+        # 401 falls through to the /v1/models list below, which works universally.
+        if server_type is None:
+            return None
         resp = client.get(f"{server_url}/v1/models/{model}")
         return _context_length_from_model_payload(resp.json()) if resp.status_code == 200 else None
     typed = {
@@ -2408,6 +2413,29 @@ def estimate_messages_tokens_rough(messages: List[Dict[str, Any]], *, charge_sta
     if not charge_stale_thinking:
         messages = _strip_stale_thinking_for_estimate(messages)
     return sum(_estimate_message_tokens_cached(msg, image_cost) for msg in messages)
+
+
+def estimate_native_anthropic_messages_tokens_rough(messages: List[Dict[str, Any]]) -> int:
+    """Estimate native Anthropic messages with replayed readable thinking charged exactly once."""
+    from agent.message_sanitization import native_anthropic_accounting_projection
+
+    projected, replayed_thinking = native_anthropic_accounting_projection(messages)
+    return estimate_messages_tokens_rough(projected) + sum(
+        estimate_tokens_rough(text) for text in replayed_thinking
+    )
+
+
+def estimate_native_anthropic_request_tokens_rough(
+    messages: List[Dict[str, Any]], *, system_prompt: str = "",
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """Request estimate for native Anthropic; opaque replay bytes never enter text accounting."""
+    from agent.message_sanitization import native_anthropic_accounting_projection
+
+    projected, replayed_thinking = native_anthropic_accounting_projection(messages)
+    return estimate_request_tokens_rough(
+        projected, system_prompt=system_prompt, tools=tools
+    ) + sum(estimate_tokens_rough(text) for text in replayed_thinking)
 
 
 # Thinking-text keys replayed for at most the newest assistant turn on non-echo routes — must stay
