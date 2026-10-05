@@ -2,6 +2,7 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import { defineLocale } from './define-locale'
 import { introZh } from './intro-zh'
+import { zhModelMenu } from './zh_model_menu'
 
 export const zh = defineLocale({
   externalOpenFailed: {
@@ -4305,22 +4306,7 @@ export const zh = defineLocale({
     windowControls: '窗口控件',
     paneControls: '面板控件',
     appControls: '应用控件',
-    modelMenu: {
-      search: '搜索模型',
-      noModels: '未找到模型',
-      editModels: '编辑模型…',
-      followDefault: '使用设置中的默认模型',
-      refreshModels: '刷新模型',
-      favorites: '收藏',
-      addFavorite: '添加到收藏',
-      removeFavorite: '从收藏中移除',
-      favoriteShortcut: '⇧ 单击',
-      fast: '快速',
-      free: '免费',
-      cacheRead: '缓存读取',
-      priceTitle: (input: string, output: string, cache: string) =>
-        `输入 ${input}/Mtok · 输出 ${output}/Mtok` + (cache ? ` · 缓存读取 ${cache}/Mtok` : '')
-    },
+    modelMenu: zhModelMenu,
     modelOptions: {
       noOptions: '此模型没有可用选项',
       options: '选项',

@@ -2,6 +2,7 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import { defineLocale } from './define-locale'
 import { introJa } from './intro-ja'
+import { jaModelMenu } from './ja_model_menu'
 
 export const ja = defineLocale({
   externalOpenFailed: {
@@ -3350,22 +3351,7 @@ export const ja = defineLocale({
     windowControls: 'ウィンドウコントロール',
     paneControls: 'ペインコントロール',
     appControls: 'アプリコントロール',
-    modelMenu: {
-      search: 'モデルを検索',
-      noModels: 'モデルが見つかりません',
-      editModels: 'モデルを編集…',
-      followDefault: '設定のデフォルトを使用',
-      refreshModels: 'モデルを更新',
-      favorites: 'お気に入り',
-      addFavorite: 'お気に入りに追加',
-      removeFavorite: 'お気に入りから削除',
-      favoriteShortcut: '⇧ クリック',
-      fast: '高速',
-      free: '無料',
-      cacheRead: 'キャッシュ読み取り',
-      priceTitle: (input: string, output: string, cache: string) =>
-        `入力 ${input}/Mtok · 出力 ${output}/Mtok` + (cache ? ` · キャッシュ読み取り ${cache}/Mtok` : '')
-    },
+    modelMenu: jaModelMenu,
     modelOptions: {
       noOptions: 'このモデルにはオプションがありません',
       options: 'オプション',
