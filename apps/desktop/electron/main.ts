@@ -525,7 +525,9 @@ import {
   createQuitTeardownCoordinator,
   type QuitTeardownTask
 } from './quit-teardown'
+import { registerRelaunchAfterUpdate } from './relaunch-after-update'
 import * as remoteLifecycle from './remote-lifecycle'
+import { resolveRegistryRequestPath } from './registry-request-path'
 import {
   attachPowerResumeRemoteRevalidation,
   ensureHealthyPooledRemoteBackendForDispatch,
@@ -1215,6 +1217,14 @@ if (IS_WINDOWS || process.platform === 'linux') {
 
 ipcMain.handle('hermes:get-remote-display-reason', () => REMOTE_DISPLAY_REASON)
 ipcMain.handle('hermes:embed-host:origin', () => embedHostOrigin())
+
+// Handler body lives in its own module so this file stays free of fork-local
+// blocks in the ipcMain registration region (upstream edits main.ts often, and
+// a local block here becomes a merge conflict that aborts `hermes update`).
+registerRelaunchAfterUpdate(ipcMain, {
+  isQuittingForHandoff: () => isQuittingForHandoff,
+  rememberLog
+})
 
 // Keep the renderer's PROCESS priority normal while its windows are hidden —
 // a deprioritized renderer streams a live answer visibly slower once the
@@ -17533,20 +17543,15 @@ async function dispatchRegistryApiRequest(
         ensureRegistryBackend(registryConnectionId, routeProfile, '', { spawnPriority })
       )
 
-  // A delegated local profile (connectionId 'local' over a genuinely local
-  // v1 route) lands on the SHARED primary backend — ensureBackend's
-  // `sharedPrimary` route, one home serving every profile. Scope the path the
-  // way the v1 handler does (resolveProfileApiRequest → the route table's
-  // scoped GETs carry ?profile=); pathForRegistryBackendRequest alone only
-  // translates an EXISTING ?profile= for isolated backends or scopes shared
-  // remotes, so scoped reads like GET /api/model/info left unscoped and the
-  // primary answered from its launch home — the Settings → 模型 page showed
-  // (and applied) the launch profile's model under every other profile's chip
-  // (#118431/#118432 through the registry route).
-  const requestPath = connection?.sharedPrimary
-    ? resolveProfileApiRequest(requestProfile, request.path, profileRouteOptions(requestProfile, request))
-        .requestPath
-    : pathForRegistryBackendRequest(request.path, requestProfile, connection)
+  // Shared-primary connections serve every profile from one home, so their
+  // path must be scoped the way the v1 handler scopes it — see
+  // registry-request-path.ts for why pathForRegistryBackendRequest alone is not
+  // enough (#118431/#118432).
+  const requestPath = resolveRegistryRequestPath(request.path, requestProfile, connection, request, {
+    pathForRegistryBackendRequest,
+    resolveProfileApiRequest,
+    profileRouteOptions
+  })
 
   const response = await fetchJsonForBackend(connection, requestPath, {
     method: request?.method,
@@ -18716,36 +18721,6 @@ ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
     message: error?.message || String(error)
   }))
 )
-
-// In-app update relaunch (AgnesCode GUI permanent fix): the in-place update
-// path rebuilds the desktop bundle while this app stays alive (the in-app
-// suicide-guard refuses to taskkill the parent), so the running renderer keeps
-// the OLD bundle in memory and Settings/About keeps showing "build too old".
-// The renderer invokes this once the update finished so we re-exec Hermes.exe
-// and load the new bundle. app.relaunch() re-executes THIS executable (never a
-// taskkill on the parent); the agent backend/gateway/Hindsight are separate
-// processes and survive. Never fires when a detached updater hand-off already
-// owns the relaunch (we'd double-spawn).
-ipcMain.handle('hermes:desktop:relaunch-after-update', async () => {
-  if (isQuittingForHandoff) {
-    rememberLog('[updates] relaunch-after-update ignored: already quitting for hand-off')
-    return { ok: false, reason: 'handoff-in-progress' }
-  }
-
-  rememberLog('[updates] relaunch-after-update: re-execing Hermes.exe to load the new bundle')
-  try {
-    app.relaunch({ args: process.argv.slice(1) })
-  } catch (error) {
-    const message = error?.message || String(error)
-    rememberLog(`[updates] relaunch-after-update failed: ${message}`)
-    return { ok: false, error: message }
-  }
-
-  // Reply to the IPC before tearing the window down.
-  setTimeout(() => app.quit(), 150)
-
-  return { ok: true }
-})
 
 ipcMain.handle('hermes:updates:branch:get', async () => readDesktopUpdateConfig())
 
