@@ -199,11 +199,7 @@ export function acknowledgeReceipt(receiptId: string): Promise<{ ok: boolean }> 
   })
 }
 
-export function getActionStatus(
-  name: string,
-  lines = 200,
-  profile?: ProfileScope
-): Promise<ActionStatusResponse> {
+export function getActionStatus(name: string, lines = 200, profile?: ProfileScope): Promise<ActionStatusResponse> {
   return window.hermesDesktop.api<ActionStatusResponse>({
     ...capabilityScoped(profile),
     path: `/api/actions/${encodeURIComponent(name)}/status?lines=${Math.max(1, lines)}`
