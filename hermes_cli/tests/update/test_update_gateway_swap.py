@@ -1,6 +1,10 @@
+import os
+import signal
 import socket
 import subprocess
 import sys
+
+import pytest
 
 from hermes_cli.update_gateway_swap import swap_gateway, GatewaySwapResult
 
@@ -41,6 +45,55 @@ if __name__ == "__main__":
 '''
 
 
+def _kill_tree(pid: int) -> None:
+    """Kill ``pid`` and every descendant. Never raises.
+
+    ``swap_gateway`` spawns the new gateway with a plain ``Popen`` and, by design,
+    leaves it running — that is the whole point of a swap. On Windows the venv
+    launcher re-execs into the hermes runtime, so the pid ``Popen`` hands back is
+    only the *parent* of the process that actually holds the socket and the venv's
+    package files. Killing just that pid strands the child, which then outlives the
+    test session and keeps the environment locked (this is what made
+    ``charset_normalizer\\cd.cp314-win_amd64.pyd`` access-denied and silently
+    skipped ``hermes pm repair``'s cleanup step).
+    """
+    if not pid or pid <= 0:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return
+    # POSIX: kill the whole process group so children go with the parent.
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+@pytest.fixture
+def spawned_gateways():
+    """Reap every gateway pid a test causes to be spawned, at test teardown.
+
+    Yields a ``track`` callable; each tracked pid is killed (with its descendants)
+    during teardown, newest first, regardless of how the test ends.
+    """
+    tracked: list[int] = []
+
+    def track(pid) -> None:
+        if pid:
+            tracked.append(int(pid))
+
+    yield track
+
+    for pid in reversed(tracked):
+        _kill_tree(pid)
+
+
 def _spawn_dummy_gateway() -> subprocess.Popen:
     """Spawn a long-running dummy process the test can kill."""
     return subprocess.Popen(
@@ -55,7 +108,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def test_swap_gateway_kills_old_pid(tmp_path):
+def test_swap_gateway_kills_old_pid(tmp_path, spawned_gateways):
     # Arrange: logs dir + gateway.pid + a fake new-gateway that will
     # become healthy via the health probe.
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
@@ -82,6 +135,9 @@ def test_swap_gateway_kills_old_pid(tmp_path):
         assert result.new_pid is not None and result.new_pid > 0
         # Old is dead
         assert old.poll() is not None
+        # The new gateway outlives the swap on purpose, so the test has to reap
+        # it -- otherwise it survives the session holding this venv open.
+        spawned_gateways(result.new_pid)
     finally:
         if old.poll() is None:
             old.kill()
