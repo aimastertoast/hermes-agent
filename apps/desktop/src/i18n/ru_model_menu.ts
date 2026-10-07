@@ -21,5 +21,15 @@ export const ruModelMenu = {
       : `${provider} исчерпал лимит использования. Модель на время после сброса можно выбрать уже сейчас.`,
   modelResets: (time: string) => `снова в ${time}`,
   modelLimitedTip: (time: string) =>
-    `Эта модель исчерпала собственный лимит и вернётся в ${time}. Остальные модели здесь работают.`
+    `Эта модель исчерпала собственный лимит и вернётся в ${time}. Остальные модели здесь работают.`,
+  usageLeft: (percent: number, time: null | string) =>
+    time ? `Осталось ${percent}% · сброс в ${time}` : `Осталось ${percent}%`,
+  poolAccounts: (count: number) => `Аккаунтов: ${count}`,
+  poolLimited: (limited: number, total: number) => `Лимит у ${limited}/${total} аккаунтов`,
+  poolAccount: (number: number) => `Аккаунт ${number}`,
+  poolUnknown: 'Данные об использовании недоступны',
+  poolUnavailable: 'Войдите снова',
+  usageTip: (provider: string) => `${provider} почти исчерпал лимит использования.`,
+  usageWindow: (label: string, percent: number, time: null | string) =>
+    time ? `${label}: осталось ${percent}%, сброс в ${time}` : `${label}: осталось ${percent}%`
 }

@@ -1,18 +1,23 @@
 """The parked-branch guard must never hang on a promisor lazy-fetch.
 
-``_assess_parked_branch_switch`` runs ``git cherry origin/<target>`` to decide
-whether a checkout parked on another branch may be moved to the update target.
-``git cherry`` computes patch-ids, so it reads trees/blobs. In a treeless
-partial clone (``remote.origin.promisor=true`` + ``partialclonefilter=tree:0``)
-those objects are stored on demand, and git spawns a lazy fetch from the
-promisor remote — with no timeout of its own. On a slow or stalling remote that
-single call blocks ``hermes update`` indefinitely: observed at 98 minutes with
-zero output after preflight.
+``_assess_parked_branch_switch`` decides whether a checkout parked on another
+branch may be moved to the update target. Two of its git calls read trees:
 
-The guard therefore must (a) never trigger a lazy fetch, (b) fall back to an
-ancestry verdict that only needs commit objects when patch-ids are unavailable
-locally, and (c) treat a timed-out git call as a completed failure rather than
+* ``git cherry`` computes patch-ids, so it reads trees/blobs. In a treeless
+  partial clone (``remote.origin.promisor=true`` + ``partialclonefilter=tree:0``)
+  those objects live on the promisor remote, and git spawns a lazy fetch from it
+  — with no timeout of its own. On a slow or stalling remote that single call
+  blocks ``hermes update`` indefinitely: observed at 98 minutes with zero output
+  after preflight, and again upstream as 332 packs / 180 GiB over 7 h (#131444).
+
+The guard therefore must (a) count parked-only commits from the commit graph
+first, which needs no trees, (b) never reach ``cherry`` at all on a partial
+clone, and (c) treat a timed-out git call as a completed failure rather than
 letting ``subprocess.run`` propagate.
+
+Real-partial-clone coverage of (a) and (b) lives in
+``tests/hermes_cli/test_update_parked_branch_guard.py``; this file pins the
+argv-level contract and the timeout conversion.
 """
 from __future__ import annotations
 
@@ -23,12 +28,19 @@ import pytest
 
 from hermes_cli import update_cmd_git
 
+PROMISOR_RE = "^(remote\\..*\\.promisor|extensions\\.partialclone)$"
+
 
 def _cp(args, returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
 
 
-def _install_git_recorder(monkeypatch, cherry: subprocess.CompletedProcess):
+def _install_git_recorder(
+    monkeypatch,
+    cherry: subprocess.CompletedProcess,
+    ahead: str = "3\n",
+    promisor: str = "",
+) -> list[tuple[list[str], dict]]:
     """Record every git argv the guard spawns; answer with canned results."""
     calls: list[tuple[list[str], dict]] = []
 
@@ -39,11 +51,10 @@ def _install_git_recorder(monkeypatch, cherry: subprocess.CompletedProcess):
             return _cp(argv, cherry.returncode, cherry.stdout, cherry.stderr)
         if "status" in argv:
             return _cp(argv, 0, "")
-        if argv[1:2] == ["merge-base"]:
-            # origin/main is NOT an ancestor of the parked branch
-            return _cp(argv, 1)
-        if argv[1:2] == ["rev-list"] and "--count" in argv:
-            return _cp(argv, 0, "3\n")
+        if "config" in argv:
+            return _cp(argv, 0, promisor)
+        if "rev-list" in argv and "--count" in argv:
+            return _cp(argv, 0, ahead)
         return _cp(argv, 0)
 
     monkeypatch.setattr(update_cmd_git.subprocess, "run", fake_run)
@@ -60,43 +71,50 @@ def no_config(monkeypatch):
 
 
 def test_cherry_never_lazy_fetches(monkeypatch, tmp_path: Path, no_config):
-    """``git cherry`` must run with lazy fetch disabled and a bounded timeout."""
+    """On a promisor/partial clone the guard must not reach cherry at all.
+
+    ``GIT_NO_LAZY_FETCH`` is ignored by git before 2.44, so bounding the call is
+    not enough — the only safe answer on a partial clone is the commit count.
+    """
     cherry = _cp(["git", "cherry"], 128, "", "fatal: unable to read tree (abc123)")
-    calls = _install_git_recorder(monkeypatch, cherry)
-
-    update_cmd_git._assess_parked_branch_switch(["git"], tmp_path, "local-main-clean", "main")
-
-    cherry_calls = [(a, kw) for a, kw in calls if "cherry" in a]
-    assert cherry_calls, "the parked-branch guard must still ask git cherry"
-
-    _, kw = cherry_calls[0]
-    env = kw.get("env") or {}
-    assert env.get("GIT_NO_LAZY_FETCH") == "1", (
-        "git cherry must not spawn a promisor lazy-fetch: it hangs the update with no timeout"
+    calls = _install_git_recorder(
+        monkeypatch, cherry, promisor="remote.origin.promisor true\n"
     )
-    assert kw.get("timeout") is not None, "a network-capable git call must be bounded"
+
+    safe, reason = update_cmd_git._assess_parked_branch_switch(
+        ["git"], tmp_path, "local-main-clean", "main"
+    )
+
+    assert not [a for a, _ in calls if "cherry" in a], (
+        "git cherry lazy-fetches on a partial clone and must never be reached there"
+    )
+    assert (safe, reason) == (True, "unmerged:3")
 
 
 def test_falls_back_to_ancestry_when_patch_ids_unavailable(
     monkeypatch, tmp_path: Path, no_config
 ):
-    """A treeless clone can't compute patch-ids — the guard must still give a verdict."""
+    """A full clone whose cherry fails must still give a verdict, not "unverifiable"."""
     cherry = _cp(["git", "cherry"], 128, "", "fatal: unable to read tree (abc123)")
-    _install_git_recorder(monkeypatch, cherry)
+    calls = _install_git_recorder(monkeypatch, cherry, promisor="")
 
     safe, reason = update_cmd_git._assess_parked_branch_switch(
         ["git"], tmp_path, "local-main-clean", "main"
     )
 
     assert safe is True, "an unreadable tree must not abort the update; commits-only checks still work"
-    assert reason.startswith("unmerged:"), reason
     assert reason == "unmerged:3", reason
+    _, kw = [pair for pair in calls if "cherry" in pair[0]][0]
+    assert (kw.get("env") or {}).get("GIT_NO_LAZY_FETCH") == "1", (
+        "even off a partial clone, cherry must not be allowed to fetch"
+    )
+    assert kw.get("timeout") is not None, "a network-capable git call must be bounded"
 
 
 def test_unmerged_parks_still_reports_count(monkeypatch, tmp_path: Path, no_config):
     """Normal path unchanged: patch-ids available, some commits not upstream."""
     cherry = _cp(["git", "cherry"], 0, "+ aaaa\n- bbbb\n+ cccc\n")
-    _install_git_recorder(monkeypatch, cherry)
+    _install_git_recorder(monkeypatch, cherry, promisor="")
 
     safe, reason = update_cmd_git._assess_parked_branch_switch(
         ["git"], tmp_path, "feature", "main"

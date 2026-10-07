@@ -410,6 +410,11 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   setPreviewGuestHidden: (webContentsId, hidden) =>
     ipcRenderer.send('hermes:preview-guest-hidden', { webContentsId, hidden: Boolean(hidden) }),
   openExternal: url => ipcRenderer.invoke('hermes:openExternal', url),
+  freeTierChallenge: {
+    // Load the account service's challenge page in a hidden window (revealed
+    // only if the page asks for the human). Resolves with how it ended.
+    run: request => ipcRenderer.invoke('hermes:freeTierChallenge:run', request)
+  },
   mcpOauth: {
     // One-shot loopback listener for MCP OAuth against remote backends: bind
     // on this machine, hand redirectUri to mcp.servers.oauth.start, then wait
@@ -633,22 +638,14 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   probeLocalBackend: () => ipcRenderer.invoke('hermes:local-backend:probe'),
   continueBootstrapLocal: () => ipcRenderer.invoke('hermes:bootstrap:continue-local'),
   recycleBackend: profile => ipcRenderer.invoke('hermes:backend:recycle', profile),
-  // PATCH 2026-07-25: disable auto-fire of resetBootstrap / repairBootstrap.
-  // During the renderer retry storm, BootFailureOverlay's Retry button
-  // was being auto-pressed repeatedly, which called these helpers and
-  // tore down the live serve backend in a tight cycle. We can't find the
-  // auto-clicker (it's outside the renderer code), so we neutralize the
-  // IPC bridges here. A future fix should remove this and let `hermes
-  // update` or a manual restart recover.
-  resetBootstrap: () => {
-    if (typeof console !== 'undefined') console.warn('[preload-patch] resetBootstrap disabled to stop renderer retry storm')
-    return Promise.resolve({ ok: false, disabled: true })
+  resetBootstrap: () => ipcRenderer.invoke('hermes:bootstrap:reset'),
+  updateHold: {
+    recheck: () => ipcRenderer.invoke('hermes:update-hold:recheck'),
+    quit: () => ipcRenderer.invoke('hermes:update-hold:quit'),
+    startAnyway: (request: { holdId: string; confirmed: true }) =>
+      ipcRenderer.invoke('hermes:update-hold:start-anyway', request)
   },
-  repairBootstrap: () => {
-    if (typeof console !== 'undefined') console.warn('[preload-patch] repairBootstrap disabled to stop renderer retry storm')
-    return Promise.resolve({ ok: false, disabled: true })
-  },
-
+  repairBootstrap: () => ipcRenderer.invoke('hermes:bootstrap:repair'),
   cancelBootstrap: () => ipcRenderer.invoke('hermes:bootstrap:cancel'),
   onBootstrapEvent: callback => {
     const listener = (_event, payload) => callback(payload)
@@ -662,7 +659,8 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   getRemoteDisplayReason: () => ipcRenderer.invoke('hermes:get-remote-display-reason'),
   uninstall: {
     summary: () => ipcRenderer.invoke('hermes:uninstall:summary'),
-    run: mode => ipcRenderer.invoke('hermes:uninstall:run', { mode })
+    run: mode => ipcRenderer.invoke('hermes:uninstall:run', { mode }),
+    openAppsSettings: () => ipcRenderer.invoke('hermes:uninstall:openAppsSettings')
   },
   updates: {
     check: opts => ipcRenderer.invoke('hermes:updates:check', opts),
