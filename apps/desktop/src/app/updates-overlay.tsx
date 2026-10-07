@@ -1,7 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useState } from 'react'
 
-import { acknowledgeReceipt, getLastReceipt } from '@/api/system'
+import { acknowledgeReceipt, getLastReceipt } from '@/api/update-receipts'
 import { BrandMark } from '@/components/brand-mark'
 import { SyncStatusCard } from '@/components/sync-status-card'
 import { Button } from '@/components/ui/button'

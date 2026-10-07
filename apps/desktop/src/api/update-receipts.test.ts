@@ -10,7 +10,7 @@ vi.mock('./client', () => ({
 
 const client = await import('./client')
 
-const { getLastReceipt, acknowledgeReceipt } = await import('./system')
+const { getLastReceipt, acknowledgeReceipt } = await import('./update-receipts')
 
 const hermesApi = vi.mocked(client.hermesApi)
 

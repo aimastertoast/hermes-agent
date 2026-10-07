@@ -22,7 +22,7 @@ const apiMock = vi.hoisted(() => ({
   getLastReceipt: vi.fn(async () => null as UpdateReceipt | null)
 }))
 
-vi.mock('@/api/system', () => apiMock)
+vi.mock('@/api/update-receipts', () => apiMock)
 
 const FAILED_RECEIPT: UpdateReceipt = {
   error: 'merge-conflict in conflict.txt',
