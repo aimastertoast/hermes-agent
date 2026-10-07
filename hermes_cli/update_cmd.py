@@ -29,6 +29,7 @@ from hermes_cli import update_receipt as _completion_receipt, update_cmd_config 
 from hermes_cli._old_updater import stop_for_relaunch
 from hermes_cli._early_recovery import git_operation_in_progress, interrupted_pull_marker, is_object_id
 from hermes_cli import update_cmd_commit as _commit
+from hermes_cli import update_cmd_posix_pause as _posix_pause
 from hermes_cli.update_cmd_pause_gate import _checkout_move, _moves_for  # noqa: F401  (re-export)
 from hermes_cli import update_cmd_check as _check
 
@@ -502,6 +503,9 @@ def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0)
     import uuid as _uuid
     from hermes_constants import get_hermes_home
 
+    if _posix_pause.gateways_paused():  # the gateway that would relay it is stopped for the update
+        print(f"  → {prompt_text} → {default or '(empty)'} (gateways are paused for the update)")
+        return default
     home = get_hermes_home()
     prompt_path = home / ".update_prompt.json"
     response_path = home / ".update_response"
@@ -1522,7 +1526,9 @@ def _prepare_checkout_for_update(
         # Keep the running code AND its branch identity for syntax rollback.
         moved_from_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
         rollback_branch = current_branch
-        # The switch (or its -B fallback) is this update's first tree write: bind both commits first.
+        # The switch (or its -B fallback) is this update's first tree write: bind both commits first,
+        # on the POSIX pause's baseline (its refusal, sticky, reaches the switch's arm_commit_point).
+        _posix_pause.pause_at_commit_point()
         with _checkout_move(_windows_gateway_resume, *(_resolved_commit(git_cmd, ref) for ref in (
                 f"refs/heads/{branch}", f"origin/{branch}"))):
             track_result = _switch_branch_at_commit_point(
@@ -1931,15 +1937,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
     _record_update_step("pre_state_capture", _verify_pre_state is not None,
                         "" if _verify_pre_state is not None else "pre-state capture failed")
 
-    # The completion child (``update_completion.run_completion``) never re-enters this
-    # function — it resumes the fleet this process stopped from the request payload it was
-    # handed — so pausing here always describes exactly the gateways this process stopped,
-    # and the atexit hook below resumes precisely that set.
-    _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
+    # Windows pauses here (venv locks); Linux/macOS only arm a pause the commit point performs.
+    _windows_gateway_resume = _m()._pause_windows_gateways_for_update() or _posix_pause.arm_pause(
+        no_gateway_restart=opts.no_gateway_restart)
     if _windows_gateway_resume:
         import atexit as _atexit
         _atexit.register(_m()._resume_windows_gateways_after_update, _windows_gateway_resume)
-
     desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
     # An installed Hermes.app only this update refreshes counts even with no release/ build
     # beside it: without one it was never rebuilt, so it never got newer (#52339).
