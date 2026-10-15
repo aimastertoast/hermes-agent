@@ -12,7 +12,7 @@
 
 import { $groupChats } from './group-chat'
 import { groupMemberKey, groupSessionMemberKey } from './group-membership'
-import { requestForBot } from './routing'
+import { GROUP_SESSION_RESUME_OPTIONS, requestForBot } from './routing'
 import type { GroupMember } from './types'
 
 /** Matches the focused-chat `/compress` budget: the gateway's compute-host
@@ -64,11 +64,19 @@ export async function compressGroupMemberHistory(
     let runtime: null | string = null
 
     try {
-      const resumed = (await requestForBot(member, 'session.resume', {
-        session_id: target,
-        profile: member.name,
-        omit_messages: true
-      })) as { session_id?: string }
+      const resumed = (await requestForBot(
+        member,
+        'session.resume',
+        {
+          session_id: target,
+          profile: member.name,
+          omit_messages: true
+        },
+        // The room's "Compress history" button is explicit user work, and
+        // routing the session's MCP servers gates this reply — the generic
+        // 30 s default outruns both on a multi-server profile.
+        GROUP_SESSION_RESUME_OPTIONS
+      )) as { session_id?: string }
 
       runtime = resumed?.session_id || null
     } catch (error: any) {

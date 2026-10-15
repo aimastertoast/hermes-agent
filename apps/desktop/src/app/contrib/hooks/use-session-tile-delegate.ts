@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 
+import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import {
   extendRefreshPageToOverlap,
   graftRefreshedTailOntoBackfill,
@@ -406,12 +407,21 @@ export function useSessionTileDelegate({
             assertSessionOwnerResolved(owner, { method: 'session.resume', sessionId: storedSessionId })
 
             return singleFlightSessionResume(storedSessionId, () =>
-              requestForSessionProfile<SessionResumeResult>(owner, requestGateway, 'session.resume', {
-                session_id: storedSessionId,
-                cols: 96,
-                omit_messages: true,
-                ...(owner ? { profile: typeof owner === 'string' ? owner : owner.profile } : {})
-              })
+              requestForSessionProfile<SessionResumeResult>(
+                owner,
+                requestGateway,
+                'session.resume',
+                {
+                  session_id: storedSessionId,
+                  cols: 96,
+                  omit_messages: true,
+                  ...(owner ? { profile: typeof owner === 'string' ? owner : owner.profile } : {})
+                },
+                // A tile resume routes the session's MCP servers before it
+                // answers; the generic 30s default outruns that on a
+                // multi-server install.
+                SESSION_RESUME_REQUEST_TIMEOUT_MS
+              )
             )
           },
           async () => {

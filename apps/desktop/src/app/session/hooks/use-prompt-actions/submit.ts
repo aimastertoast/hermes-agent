@@ -1,6 +1,7 @@
 import type { PromptSubmitResult } from '@hermes/shared'
 import { type MutableRefObject, useCallback } from 'react'
 
+import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { getSession, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
 import { translateNow, type Translations } from '@/i18n'
 import { type ChatMessage, finalizeInterruptedMessages, textPart } from '@/lib/chat-messages'
@@ -707,12 +708,19 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             : await singleFlightSessionResume(targetStoredSessionId, async () => {
                 const resumeProfile = await resolveSessionProfile(targetStoredSessionId)
 
-                return requestGateway<{ session_id: string }>('session.resume', {
-                  session_id: targetStoredSessionId,
-                  source: 'desktop',
-                  omit_messages: true,
-                  ...(resumeProfile ? { profile: resumeProfile } : {})
-                })
+                return requestGateway<{ session_id: string }>(
+                  'session.resume',
+                  {
+                    session_id: targetStoredSessionId,
+                    source: 'desktop',
+                    omit_messages: true,
+                    ...(resumeProfile ? { profile: resumeProfile } : {})
+                  },
+                  // Routing the session's MCP servers gates this reply, so the
+                  // generic 30s default can reject a rebind that then
+                  // completes anyway and orphans the durable session.
+                  SESSION_RESUME_REQUEST_TIMEOUT_MS
+                )
               })
 
           const resumeDrift = sessionDriftReason()

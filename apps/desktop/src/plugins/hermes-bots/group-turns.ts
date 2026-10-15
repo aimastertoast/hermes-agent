@@ -31,7 +31,7 @@ import {
   formatFreshThreadRoomContext,
   GROUP_PROMPT_HEADER_PREFIX
 } from './group-round-prompt'
-import { botConnectionRoute, requestForBot } from './routing'
+import { botConnectionRoute, GROUP_SESSION_BACKGROUND_RESUME_OPTIONS, GROUP_SESSION_RESUME_OPTIONS, requestForBot } from './routing'
 import type { Attachment, GroupMember, GroupPrompt, GroupPromptQuestion, ProfileRoute } from './types'
 
 /** "(pass)" (loosely: pass / (pass) / pass.) or empty = the member stayed silent. */
@@ -194,14 +194,9 @@ interface GroupSessionSnapshot {
 
 /** Group turns are explicit user work. A member may be cold or retired when
  *  its round begins, and session hydration can legitimately wait behind a
- *  remote or WSL backend. Use the same three-minute budget as Desktop's
- *  focused session hydration instead of the generic 30-second RPC deadline. */
-const GROUP_SESSION_RESUME_OPTIONS = {
-  spawnPriority: 'foreground',
-  timeoutMs: 180_000
-} as const
+ *  remote or WSL backend. The three-minute budget lives in ./routing beside
+ *  the other Bot Mode resume policy. */
 
-const GROUP_SESSION_BACKGROUND_RESUME_OPTIONS = { timeoutMs: 180_000 } as const
 const GROUP_SESSION_CREATE_OPTIONS = { spawnPriority: 'foreground' } as const
 
 function resumeGroupSession(member: GroupMember, params: Record<string, unknown>): Promise<GroupSessionSnapshot> {

@@ -5,6 +5,7 @@ import type { MutableRefObject } from 'react'
 import { useEffect, useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
 import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import { resolveSessionRpcOwner } from '@/app/contrib/wiring-routing'
@@ -214,7 +215,12 @@ function Harness({
   getRoutedStoredSessionId?: () => null | string
   navigate?: ReturnType<typeof vi.fn>
   onReady: (handle: HarnessHandle) => void
-  requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+  requestGateway: <T>(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ) => Promise<T>
   runtimeIdByStoredSessionIdRef?: MutableRefObject<Map<string, string>>
   selectedStoredSessionId?: null | string
   selectedStoredSessionIdRef?: MutableRefObject<null | string>
@@ -1608,7 +1614,12 @@ function ResumeHarness({
   onReady: (
     resume: (storedSessionId: string, replaceRoute?: boolean, ownerRoute?: SessionProfileRoute) => Promise<unknown>
   ) => void
-  requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+  requestGateway: <T>(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ) => Promise<T>
   runtimeIdByStoredSessionIdRef?: MutableRefObject<Map<string, string>>
   selectedStoredSessionId?: string | null
   sessionStateByRuntimeIdRef?: MutableRefObject<Map<string, ClientSessionState>>
@@ -1924,6 +1935,33 @@ describe('resumeSession failure recovery', () => {
     expect(state?.streamId).toBe(state?.messages.find(message => message.pending)?.id)
   })
 
+  it('bounds session.resume by the resume timeout instead of the generic gateway default', async () => {
+    // Regression for "繼續失敗: request timed out after 30s: session.resume"
+    // against a HEALTHY backend. The resume kept completing server-side after
+    // the client gave up (it went on registering MCP tools for 35+ s past the
+    // rejection), so the generic 30s default only ever produced a false
+    // failure toast for a resume that had already succeeded.
+    // Declared with parameters so `mock.calls` keeps a real tuple type — a
+    // zero-arg mock types calls as `[][]`, and reading call[0]/call[2] off that
+    // is a TS2493 rather than the assertion we actually want.
+    const requestGateway = vi.fn(
+      async (_method: string, _params?: Record<string, unknown>, _timeoutMs?: number) =>
+        ({
+          session_id: 'runtime-1',
+          session_key: 'stored-1',
+          running: true
+        }) as never
+    )
+
+    await runResume(requestGateway)
+
+    const resumeCall = requestGateway.mock.calls.find(call => call[0] === 'session.resume')
+    expect(resumeCall).toBeDefined()
+    expect(resumeCall?.[2]).toBe(SESSION_RESUME_REQUEST_TIMEOUT_MS)
+    // Guard the intent: this must stay clear of the 30s default that caused it.
+    expect(SESSION_RESUME_REQUEST_TIMEOUT_MS).toBeGreaterThan(30_000)
+  })
+
   it('arms $resumeFailedSessionId when resume RPC and REST fallback both fail', async () => {
     // session.resume rejects (e.g. timeout against a wedged backend)...
     const requestGateway = vi.fn(async (method: string) => {
@@ -2213,7 +2251,9 @@ describe('resumeSession failure recovery', () => {
 
     const resumePromise = resume!('stored-1', true)
 
-    await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('session.resume', expect.anything()))
+    await waitFor(() =>
+      expect(requestGateway).toHaveBeenCalledWith('session.resume', expect.anything(), SESSION_RESUME_REQUEST_TIMEOUT_MS)
+    )
 
     const runtimeState = clientState('stored-1')
     runtimeState.messages = [
@@ -2439,7 +2479,9 @@ describe('resumeSession failure recovery', () => {
     act(() => {
       resumePromise = resume!('stored-1', true)
     })
-    await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('session.resume', expect.any(Object)))
+    await waitFor(() =>
+      expect(requestGateway).toHaveBeenCalledWith('session.resume', expect.any(Object), SESSION_RESUME_REQUEST_TIMEOUT_MS)
+    )
 
     // The visible timer is anchored before the delayed RPC resolves.
     expect($sessionStartedAt.get()).toBe(resumeStartedAt)
@@ -4115,7 +4157,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
       'hermes01',
       'default',
       'session.resume',
-      expect.objectContaining({ session_id: 'remote-stored' })
+      expect.objectContaining({ session_id: 'remote-stored' }),
+      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined
     )
     expect(requestGatewayForProfile).not.toHaveBeenCalled()
     expect(ambientRequest).not.toHaveBeenCalled()
@@ -4237,7 +4281,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
       'source-a',
       'default',
       'session.resume',
-      expect.objectContaining({ session_id: 'stored-cold' })
+      expect.objectContaining({ session_id: 'stored-cold' }),
+      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined
     )
     expect(ambientRequest).not.toHaveBeenCalled()
   })
@@ -4280,7 +4326,9 @@ describe('resumeSession warm-cache mapping integrity', () => {
       'test-amnezia',
       'default',
       'session.resume',
-      expect.objectContaining({ session_id: 'stored-registry' })
+      expect.objectContaining({ session_id: 'stored-registry' }),
+      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined
     )
     expect(ambientRequest).not.toHaveBeenCalled()
   })

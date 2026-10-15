@@ -4,6 +4,7 @@ import type { MutableRefObject } from 'react'
 import { useEffect, useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { getLatestSessionMessages, getSession } from '@/hermes'
 import { en } from '@/i18n/en'
 import { textPart } from '@/lib/chat-messages'
@@ -2418,11 +2419,15 @@ describe('usePromptActions submit / queue drain semantics', () => {
     })
 
     expect(accepted).toBe(true)
-    expect(requestGateway).toHaveBeenCalledWith('session.resume', {
-      session_id: 'stored-session-b',
-      source: 'desktop',
-      omit_messages: true
-    })
+    expect(requestGateway).toHaveBeenCalledWith(
+      'session.resume',
+      {
+        session_id: 'stored-session-b',
+        source: 'desktop',
+        omit_messages: true
+      },
+      SESSION_RESUME_REQUEST_TIMEOUT_MS
+    )
     expect(requestGateway).toHaveBeenCalledWith(
       'prompt.submit',
       {
@@ -2646,11 +2651,15 @@ describe('usePromptActions submit / queue drain semantics', () => {
 
     expect(accepted).toBe(true)
     // Must resume the correct stored session to get the right runtime id.
-    expect(requestGateway).toHaveBeenCalledWith('session.resume', {
-      session_id: 'stored-session-a',
-      source: 'desktop',
-      omit_messages: true
-    })
+    expect(requestGateway).toHaveBeenCalledWith(
+      'session.resume',
+      {
+        session_id: 'stored-session-a',
+        source: 'desktop',
+        omit_messages: true
+      },
+      SESSION_RESUME_REQUEST_TIMEOUT_MS
+    )
     // The prompt must land in the resumed session, NOT the foreground.
     expect(requestGateway).toHaveBeenCalledWith(
       'prompt.submit',

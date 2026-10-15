@@ -1,6 +1,7 @@
 import type { AppendMessage } from '@assistant-ui/react'
 import { JsonRpcGatewayError } from '@hermes/shared'
 
+import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { translateNow, type Translations } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
 import { isReadFileErrorResult } from '@/lib/desktop-fs'
@@ -125,12 +126,18 @@ export async function resumeStoredRuntimeSession(
     const resolveProfile = deps.resolveProfile ?? defaultResolveProfile
     const profile = await resolveProfile(storedSessionId)
 
-    return deps.requestGateway<{ session_id: string }>('session.resume', {
-      session_id: storedSessionId,
-      source: 'desktop',
-      omit_messages: true,
-      ...(profile ? { profile } : {})
-    })
+    return deps.requestGateway<{ session_id: string }>(
+      'session.resume',
+      {
+        session_id: storedSessionId,
+        source: 'desktop',
+        omit_messages: true,
+        ...(profile ? { profile } : {})
+      },
+      // Re-registration routes the session's MCP servers before it answers, so
+      // the generic 30s default rejects a rebind that then completes anyway.
+      SESSION_RESUME_REQUEST_TIMEOUT_MS
+    )
   })
 
   return resumed?.session_id ?? null

@@ -26,6 +26,23 @@ const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000
 // ever fires when the turn itself would have been abandoned server-side.
 export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
 
+// session.resume is the RPC behind the composer's "Continue". Its intended
+// shape is a deferred build: return the transcript immediately and let the
+// agent pre-warm behind it. But the resume still has to route the session's
+// MCP servers before the RPC returns, and on an install with several remote
+// MCP servers that discovery legitimately runs for minutes — measured here at
+// 8 servers, where the server kept registering tools (resend 106, lovable 45,
+// chrome-devtools 30) for 35+ s AFTER the generic 30 s default had already
+// rejected. The user saw "Continue failed" on a resume that then completed
+// underneath them, and the same toast appeared on a healthy install right
+// after an update, so it was never really a connectivity fault.
+//
+// This is the same bug class as #55024 above, one call site over. 5 minutes
+// outlasts MCP discovery across a normal install while still failing loudly
+// against a gateway that is genuinely wedged, where 30 min would leave the
+// Continue button looking merely slow.
+export const SESSION_RESUME_REQUEST_TIMEOUT_MS = 300_000
+
 export const GATEWAY_NOT_CONNECTED_MESSAGE = 'Hermes gateway is not connected'
 
 export class HermesGateway extends JsonRpcGatewayClient {

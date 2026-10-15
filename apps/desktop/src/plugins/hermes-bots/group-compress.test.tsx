@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createGroupGateway } from './group-test-utils'
 import type { ScriptedGateway } from './group-test-utils'
 import { translateBots } from './i18n-test-helper'
+import { GROUP_SESSION_RESUME_OPTIONS } from './routing'
 
 // #102291: room member sessions are hidden plumbing nothing else can compress.
 // The room settings dialog owns a per-member "Compress history" that resumes
@@ -74,16 +75,20 @@ beforeEach(() => {
 
   // The scripted gateway answers unknown methods with `{}`; give
   // session.compress the in-process gateway's real result shape.
-  const inner = state.gateway.host.request as (method: string, params: Record<string, unknown>) => Promise<unknown>
+  const inner = state.gateway.host.request as (
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs?: number
+  ) => Promise<unknown>
 
-  state.gateway.host.request = async (method: string, params: Record<string, unknown> = {}) => {
+  state.gateway.host.request = async (method: string, params: Record<string, unknown> = {}, timeoutMs?: number) => {
     if (method === 'session.compress') {
-      state.gateway!.rpc.push({ method, params, refcountAfter: 0 })
+      state.gateway!.rpc.push({ method, params, refcountAfter: 0, timeoutMs })
 
       return { status: 'compressed', before_messages: 1588, after_messages: 134, summary: { headline: '1588 → 134' } }
     }
 
-    return inner(method, params)
+    return inner(method, params, timeoutMs)
   }
 
   Object.assign(host, state.gateway.host)
@@ -119,6 +124,9 @@ it('compressGroupMemberHistory resumes each stored session for the member and co
   expect(methods).toEqual(['session.resume', 'session.compress'])
   const [resume, compress] = state.gateway!.rpc
   expect(resume.params).toMatchObject({ session_id: mason, profile: 'mason', omit_messages: true })
+  // Routing the session's MCP servers gates this reply, so the resume must not
+  // ride the generic 30 s socket default.
+  expect(resume.timeoutMs).toBe(GROUP_SESSION_RESUME_OPTIONS.timeoutMs)
   // The compress targets the runtime id the resume minted, not the stored id.
   expect(compress.params.session_id).toBe(state.gateway!.sessions.get(mason)!.runtime)
   expect(compress.params.session_id).not.toBe(mason)

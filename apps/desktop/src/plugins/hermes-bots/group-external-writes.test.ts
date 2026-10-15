@@ -5,6 +5,7 @@ import type * as groupMembership from './group-membership'
 import type * as groupRounds from './group-rounds'
 import { createGroupGateway, drain, runTimersInline, scriptedStorage } from './group-test-utils'
 import type { GatewayOptions, ScriptedGateway } from './group-test-utils'
+import { GROUP_SESSION_BACKGROUND_RESUME_OPTIONS } from './routing'
 import type { GroupChat, GroupMember } from './types'
 
 // #93813: a member's per-group session is a plain Hermes session, so the CLI
@@ -180,5 +181,15 @@ describe('external writes into a member session', () => {
       'status report: all green'
     ])
     expect(room.gateway.calls).toHaveLength(2)
+
+    // The sweep's own hydration takes the background budget, and no foreground
+    // slot: nobody is waiting on a mirror. The generic 30 s socket default
+    // outruns routing the session's MCP servers on a multi-server profile.
+    const sweepResume = room.gateway
+      .rpcFor('session.resume')
+      .find(call => call.timeoutMs === GROUP_SESSION_BACKGROUND_RESUME_OPTIONS.timeoutMs)
+
+    expect(sweepResume).toBeDefined()
+    expect(sweepResume!.spawnPriority).toBeUndefined()
   })
 })

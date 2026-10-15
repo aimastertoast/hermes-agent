@@ -207,6 +207,22 @@ export interface BotRequestOptions {
   timeoutMs?: number
 }
 
+/** Hydrating a group's per-member session is bounded like Desktop's focused
+ *  session hydration instead of the generic 30 s RPC default: the round that
+ *  asked for it is explicit user work, the member may be cold, and routing the
+ *  session's MCP servers gates the reply — so the default reports a false
+ *  timeout on a multi-server profile while the resume completes anyway.
+ *  'foreground' also lets a cold backend spawn take the pool's reserved slot. */
+export const GROUP_SESSION_RESUME_OPTIONS = {
+  spawnPriority: 'foreground',
+  timeoutMs: 180_000
+} as const
+
+/** The same budget for hydration nobody is waiting on — a stranded-turn
+ *  harvest, the sweep that mirrors writes made outside the room. No
+ *  'foreground': it must not spend the reserved slot on a cold backend. */
+export const GROUP_SESSION_BACKGROUND_RESUME_OPTIONS = { timeoutMs: 180_000 } as const
+
 /** Writes to a bot's own profile only ever come from a user action (a save,
  *  a section move, an avatar change, a duplicate). The pool reserves a slot
  *  for foreground dials only, so a write left at the background default

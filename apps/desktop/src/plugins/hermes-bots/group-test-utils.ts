@@ -359,11 +359,11 @@ export function createGroupGateway(options: GatewayOptions = {}): ScriptedGatewa
     return {}
   }
 
-  const record = async (method: string, params: Record<string, unknown>) => {
+  const record = async (method: string, params: Record<string, unknown>, timeoutMs?: number) => {
     try {
       return await handle(method, params)
     } finally {
-      rpc.push({ method, params, refcountAfter: refcount })
+      rpc.push({ method, params, refcountAfter: refcount, timeoutMs })
     }
   }
 
@@ -371,7 +371,8 @@ export function createGroupGateway(options: GatewayOptions = {}): ScriptedGatewa
     activeConnectionId: () => 'local',
     notify: vi.fn(),
     notifyError: vi.fn(),
-    request: async (method: string, params: Record<string, unknown> = {}) => record(method, params),
+    request: async (method: string, params: Record<string, unknown> = {}, timeoutMs?: number) =>
+      record(method, params, timeoutMs),
     requestProfile: async (
       _route: unknown,
       method: string,
