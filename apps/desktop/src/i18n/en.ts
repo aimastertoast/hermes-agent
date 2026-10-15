@@ -1187,10 +1187,10 @@ export const en: Translations = {
       screenRecording: 'Screen Recording',
       driverHealth: 'Driver health'
     },
-    about: {{
-      updates: '{upd}',
-      channel: {cc}UpdateChannel,
-      updateModes: {{
+    about: {
+      updates: 'Updates',
+      channel: enUpdateChannel,
+      updateModes: {
         title: 'Update behavior',
         safeModeAutoLabel: 'Auto-apply safe updates',
         safeModeAutoDescription:
@@ -1198,8 +1198,8 @@ export const en: Translations = {
         allowLocalAheadLabel: 'Allow Update Now when local is ahead',
         allowLocalAheadDescription:
           'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
-      }}
-    }},
+      }
+    },
     config: {
       minimizeToTrayTitle: 'Minimize to tray',
       minimizeToTrayDesc:

@@ -1535,10 +1535,10 @@ export const esOverrides = {
       screenRecording: 'Grabación de pantalla',
       driverHealth: 'Estado del controlador'
     },
-    about: {{
-      updates: '{upd}',
-      channel: {cc}UpdateChannel,
-      updateModes: {{
+    about: {
+      updates: 'Actualizaciones',
+      channel: esUpdateChannel,
+      updateModes: {
         title: 'Update behavior',
         safeModeAutoLabel: 'Auto-apply safe updates',
         safeModeAutoDescription:
@@ -1546,8 +1546,8 @@ export const esOverrides = {
         allowLocalAheadLabel: 'Allow Update Now when local is ahead',
         allowLocalAheadDescription:
           'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
-      }}
-    }},
+      }
+    },
     config: {
       minimizeToTrayTitle: 'Minimizar a la bandeja',
       minimizeToTrayDesc:

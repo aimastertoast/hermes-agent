@@ -269,12 +269,15 @@ describe('useSessionTileDelegate resumeTile', () => {
 
     await sessionTileDelegate()!.resumeTile('stored-tile', { authoritativeSnapshot: true })
 
+    // The fork bounds tile resumes with SESSION_RESUME_REQUEST_TIMEOUT_MS —
+    // routing the session's MCP servers gates the reply and outruns the
+    // generic 30s default on a multi-server install.
     expect(requestGatewayForAgent).toHaveBeenCalledWith('remote-tile', 'tile-profile', 'session.resume', {
       cols: 96,
       omit_messages: false,
       profile: 'backend-tile',
       session_id: 'stored-tile'
-    })
+    }, SESSION_RESUME_REQUEST_TIMEOUT_MS, undefined)
     expect(getLatestSessionMessages).not.toHaveBeenCalled()
     expect(states.current.get('runtime-tile')).toMatchObject({ busy: true, model: 'snapshot-model' })
     expect(JSON.stringify(states.current.get('runtime-tile')?.messages)).toContain('new answer')

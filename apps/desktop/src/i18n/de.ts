@@ -1532,10 +1532,10 @@ export const deOverrides = {
       screenRecording: 'Bildschirmaufnahme',
       driverHealth: 'Treiberstatus'
     },
-    about: {{
-      updates: '{upd}',
-      channel: {cc}UpdateChannel,
-      updateModes: {{
+    about: {
+      updates: 'Updates',
+      channel: deUpdateChannel,
+      updateModes: {
         title: 'Update behavior',
         safeModeAutoLabel: 'Auto-apply safe updates',
         safeModeAutoDescription:
@@ -1543,8 +1543,8 @@ export const deOverrides = {
         allowLocalAheadLabel: 'Allow Update Now when local is ahead',
         allowLocalAheadDescription:
           'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
-      }}
-    }},
+      }
+    },
     config: {
       minimizeToTrayTitle: 'In den Infobereich minimieren',
       minimizeToTrayDesc:

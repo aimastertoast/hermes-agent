@@ -2077,7 +2077,6 @@ export function useSessionActions({
               SESSION_RESUME_REQUEST_TIMEOUT_MS
             ),
           { requiresMessages: options?.authoritativeSnapshot, scope: sessionOwner }
-        )
         ).then(resumed => {
           resumeRuntimeBaselineMessages =
             sessionStateByRuntimeIdRef.current.get(resumed.session_id)?.messages ?? resumeRuntimeBaselineMessages

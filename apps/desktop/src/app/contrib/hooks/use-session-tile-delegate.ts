@@ -449,7 +449,6 @@ export function useSessionTileDelegate({
                 ),
               { requiresMessages: authoritativeSnapshot, scope: owner }
             )
-            )
           },
           async () => {
             const stored =

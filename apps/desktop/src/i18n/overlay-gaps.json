@@ -2246,5 +2246,16 @@
   "zones.closeRunningTitle": ["ja","zh-hant"],
   "zones.newSessionTab": ["ar"],
   "zones.newTab": ["ar","ru"],
-  "zones.zoneMenuLabel": ["ja","zh-hant"]
+  "zones.zoneMenuLabel": ["ja","zh-hant"],
+  "settings.about.updateModes.title": ["ar","ja","ru","zh","zh-hant"],
+  "settings.about.updateModes.safeModeAutoLabel": ["ar","ja","ru","zh","zh-hant"],
+  "settings.about.updateModes.safeModeAutoDescription": ["ar","ja","ru","zh","zh-hant"],
+  "settings.about.updateModes.allowLocalAheadLabel": ["ar","ja","ru","zh","zh-hant"],
+  "settings.about.updateModes.allowLocalAheadDescription": ["ar","ja","ru","zh","zh-hant"],
+  "updates.acknowledge": ["ar","ja","ru","zh","zh-hant"],
+  "updates.updateConflict": ["ar","ja","ru","zh","zh-hant"],
+  "updates.updateConflictResolve": ["ar","ja","ru","zh","zh-hant"],
+  "updates.updateFailed": ["ar","ja","ru","zh","zh-hant"],
+  "updates.updateSucceeded": ["ar","ja","ru","zh","zh-hant"],
+  "updates.viewReceipt": ["ar","ja","ru","zh","zh-hant"]
 }

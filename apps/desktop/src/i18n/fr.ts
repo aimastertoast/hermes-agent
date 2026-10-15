@@ -1539,10 +1539,10 @@ export const frOverrides = {
       screenRecording: "Enregistrement de l'écran",
       driverHealth: 'État du pilote'
     },
-    about: {{
-      updates: '{upd}',
-      channel: {cc}UpdateChannel,
-      updateModes: {{
+    about: {
+      updates: 'Mises à jour',
+      channel: frUpdateChannel,
+      updateModes: {
         title: 'Update behavior',
         safeModeAutoLabel: 'Auto-apply safe updates',
         safeModeAutoDescription:
@@ -1550,8 +1550,8 @@ export const frOverrides = {
         allowLocalAheadLabel: 'Allow Update Now when local is ahead',
         allowLocalAheadDescription:
           'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
-      }}
-    }},
+      }
+    },
     config: {
       minimizeToTrayTitle: 'Réduire dans la barre d’état',
       minimizeToTrayDesc:
