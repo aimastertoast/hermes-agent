@@ -3127,3 +3127,105 @@ class TestRedirectHeaderStripper:
             location="https://origin.example.test/other")
         assert next_request.headers["authorization"] == "Bearer x"
         assert next_request.headers["x-tenant"] == "t"
+
+
+# ---------------------------------------------------------------------------
+# SSE per-event size floor (httpx2 >= 2.12 regression)
+# ---------------------------------------------------------------------------
+
+class TestWidenSseEventLimit:
+    """httpx2 >= 2.12 caps each SSE event at 1 MiB by default (2.7.0 and older had no
+    cap). Large tool catalogs (e.g. Cloudflare's 3.7k-tool tools/list) arrive as ONE
+    event, the parser aborts mid-stream, and the SDK reports the event as lost
+    ("SSE stream ended without a response"). ``sdk_httpx`` must raise the cap for
+    SDK-created EventSources while leaving explicit caller limits alone."""
+
+    @staticmethod
+    def _fake_httpx_module(default, param_name="max_event_size"):
+        class FakeEventSource:
+            def __init__(self, response, **kwargs):
+                self.response = response
+                self.max_event_size = kwargs.get(param_name, default)
+        return SimpleNamespace(EventSource=FakeEventSource, _default=default,
+                               _param_name=param_name)
+
+    def _init_kwargs(self, module):
+        """Rebuild an __init__ with the module's parameter shape for the shim to wrap."""
+        return module
+
+    def test_numeric_default_is_raised_to_floor(self):
+        from tools.mcp_tool import _SSE_EVENT_SIZE_FLOOR_BYTES, _widen_sse_event_limit
+
+        module = self._fake_httpx_module(1024 * 1024)
+        # Give the fake the real signature shape the shim inspects.
+        default = module._default
+
+        def __init__(self, response, max_event_size=default):
+            self.max_event_size = max_event_size
+        module.EventSource.__init__ = __init__
+
+        _widen_sse_event_limit(module)
+        es = module.EventSource(object())
+        assert es.max_event_size >= _SSE_EVENT_SIZE_FLOOR_BYTES
+
+    def test_explicit_smaller_limit_is_respected(self):
+        from tools.mcp_tool import _widen_sse_event_limit
+
+        default = 1024 * 1024
+
+        def __init__(self, response, max_event_size=default):
+            self.max_event_size = max_event_size
+        class FakeEventSource:
+            pass
+        FakeEventSource.__init__ = __init__
+        module = SimpleNamespace(EventSource=FakeEventSource)
+
+        _widen_sse_event_limit(module)
+        es = module.EventSource(object(), max_event_size=4096)
+        assert es.max_event_size == 4096
+
+    def test_unlimited_default_stays_unlimited(self):
+        from tools.mcp_tool import _widen_sse_event_limit
+
+        def __init__(self, response, max_event_size=None):
+            self.max_event_size = max_event_size
+        class FakeEventSource:
+            pass
+        FakeEventSource.__init__ = __init__
+        module = SimpleNamespace(EventSource=FakeEventSource)
+
+        _widen_sse_event_limit(module)
+        es = module.EventSource(object())
+        assert es.max_event_size is None
+
+    def test_module_without_size_parameter_is_untouched(self):
+        """httpx2 2.7.0 has no max_event_size at all — the shim must no-op, not break."""
+        from tools.mcp_tool import _widen_sse_event_limit
+
+        def __init__(self, response):
+            self.response = response
+        class FakeEventSource:
+            pass
+        FakeEventSource.__init__ = __init__
+        module = SimpleNamespace(EventSource=FakeEventSource)
+        original = module.EventSource.__init__
+
+        _widen_sse_event_limit(module)
+        assert module.EventSource.__init__ is original
+
+    def test_shim_is_idempotent(self):
+        from tools.mcp_tool import _widen_sse_event_limit
+
+        default = 1024 * 1024
+
+        def __init__(self, response, max_event_size=default):
+            self.max_event_size = max_event_size
+        class FakeEventSource:
+            pass
+        FakeEventSource.__init__ = __init__
+        module = SimpleNamespace(EventSource=FakeEventSource)
+
+        _widen_sse_event_limit(module)
+        patched = module.EventSource.__init__
+        _widen_sse_event_limit(module)
+        assert module.EventSource.__init__ is patched

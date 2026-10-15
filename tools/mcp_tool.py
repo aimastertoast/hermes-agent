@@ -191,6 +191,48 @@ def _ensure_mcp_sdk() -> bool:
 
 _SDK_HTTPX_MOD = None
 
+# httpx2 >= 2.12 caps a single SSE event at 1 MiB by default (2.7.0 and older had no
+# cap). Large tool catalogs arrive as ONE event — Cloudflare's ~3.7k-tool tools/list
+# is well past 1 MiB — so the parser aborts mid-stream and the SDK reports the event
+# as lost ("SSE stream ended without a response"), parking the server. Any
+# SDK-created EventSource therefore gets at least this floor; explicit caller limits
+# are respected.
+_SSE_EVENT_SIZE_FLOOR_BYTES = 64 * 1024 * 1024
+
+
+def _widen_sse_event_limit(httpx_mod) -> None:
+    """Raise ``EventSource``'s per-event size floor for the SDK's httpx module.
+
+    Best-effort and idempotent: an httpx without a ``max_event_size`` parameter
+    (<= 2.7.0, no cap) or a drifted signature is left untouched.
+    """
+    event_source = getattr(httpx_mod, "EventSource", None)
+    init = getattr(event_source, "__init__", None)
+    if init is None or getattr(init, "_hermes_sse_floor", False):
+        return
+    try:
+        import inspect
+
+        param = inspect.signature(init).parameters.get("max_event_size")
+        if param is None:
+            return
+        original_default = param.default
+    except (TypeError, ValueError):
+        return
+
+    def _init_with_floor(self, response, *args, **kwargs):
+        if not args and kwargs.get("max_event_size", _DEFAULT_SENTINEL) is _DEFAULT_SENTINEL:
+            kwargs["max_event_size"] = (
+                max(original_default, _SSE_EVENT_SIZE_FLOOR_BYTES)
+                if isinstance(original_default, int) else original_default)
+        return init(self, response, *args, **kwargs)
+
+    _init_with_floor._hermes_sse_floor = True
+    event_source.__init__ = _init_with_floor
+
+
+_DEFAULT_SENTINEL = object()
+
 
 def sdk_httpx():
     """The httpx module the *installed* MCP SDK is built against (mcp 2.0 moved to ``httpx2``).
@@ -212,6 +254,11 @@ def sdk_httpx():
             _SDK_HTTPX_MOD = importlib.import_module(fallback)
         except ImportError:
             pass
+    if _SDK_HTTPX_MOD is not None:
+        try:
+            _widen_sse_event_limit(_SDK_HTTPX_MOD)
+        except Exception:  # pragma: no cover — never brick MCP for a compat shim
+            logger.debug("SSE event-size floor not applied", exc_info=True)
     return _SDK_HTTPX_MOD
 
 
