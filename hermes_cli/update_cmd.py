@@ -2029,13 +2029,17 @@ def _cmd_update_impl(args, gateway_mode: bool):
     completion_request["branch"] = branch
     # A fork install's branch is local-only, and the desktop passes it as
     # --branch; fetching it fails with "couldn't find remote ref". What the user
-    # wants is the channel's own branch merged INTO the local one -- which is
-    # exactly what the no---branch path already does, and what the CLI does
-    # today. So treat an unreachable --branch as if it had not been given.
+    # wants is the channel's own branch merged INTO the local one. Re-pin the
+    # subscription to that branch instead of dropping it: args.branch=None would
+    # let the channel's release pin land DETACHED at its exact commit,
+    # abandoning the maintained branch. With origin/<branch> as the target the
+    # parked-branch guard stays in charge and merges in place under
+    # updates.parked_branch_strategy=update_in_place.
     if getattr(args, "branch", None) and not _remote_has_branch(_m().PROJECT_ROOT, branch):
         selected_channel = _source_update_channel(args)
         print(f"  (branch {branch} is local-only; updating from the {selected_channel} channel instead)")
-        args.branch = None  # select_apply_target treats an absent --branch as a channel subscription
+        args.branch = branch = "main"
+        completion_request["branch"] = branch
     target_ref, release_sha, target_is_head, target_repository = _check.select_apply_target(
         args, branch, completion_request, git_cmd=None if use_zip_update else git_cmd,
         stop=lambda: _m()._resume_windows_gateways_after_update(_windows_gateway_resume))
