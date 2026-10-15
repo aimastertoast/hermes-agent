@@ -674,7 +674,36 @@ def profile_flag_value(command: str) -> Optional[str]:
             return tok.partition("=")[2]
         if tok in ("-p", "--profile") and i + 1 < len(tokens):
             return tokens[i + 1]
+    # A runpy bootstrap hides the real argv inside its -c source, where whitespace tokenization
+    # sees ``'--profile',`` (quote and comma attached) and can never match. Match the flags on
+    # the embedded values instead — token equality is preserved on the parsed elements.
+    values = _embedded_runpy_argv_values(command)
+    for i, val in enumerate(values):
+        if val.startswith("--profile="):
+            return val.partition("=")[2]
+        if val in ("-p", "--profile") and i + 1 < len(values):
+            return values[i + 1]
     return None
+
+
+_RUNPY_EMBEDDED_ARGV_RE = re.compile(r"sys\.argv\s*=\s*\[([^\]]*)\]")
+_EMBEDDED_ARGV_ELEMENT_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"")
+
+
+def _embedded_runpy_argv_values(command: str) -> list[str]:
+    """Quoted element values of a runpy bootstrap's embedded ``sys.argv = [...]`` literal, or [].
+
+    The Windows launcher runs the CLI as ``python -I -c "... sys.argv = ['...main.py',
+    '--profile', 'ops', 'gateway', 'run']; ..."``: the real argv is a quoted list INSIDE the
+    -c source, invisible to whitespace tokenization. Parse the elements so callers that match
+    flags token-wise keep their exact-equality safety on the real values."""
+    match = _RUNPY_EMBEDDED_ARGV_RE.search(command)
+    if match is None:
+        return []
+    return [
+        next(g for g in element.groups() if g is not None)
+        for element in _EMBEDDED_ARGV_ELEMENT_RE.finditer(match.group(1))
+    ]
 
 
 _HERMES_HOME_ASSIGNMENT_RE = re.compile(r"(?:^|\s)hermes_home=(?:\"([^\"]*)\"|'([^']*)'|(\S+))")
