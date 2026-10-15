@@ -299,7 +299,14 @@ describe('submit timeout admission fences', () => {
     await actRender(<Harness onReady={h => (handle = h)} rawAdmissionReceipts refreshSessions={async () => undefined} requestGateway={requestGateway} />)
     expect(await handle!.submitText('safe identified retry', { submission_id: 'identified-timeout' })).toBe(true)
     expect(submits.map(p => p.submission_id)).toEqual(['identified-timeout', 'identified-timeout'])
-    expect(requestGateway).toHaveBeenCalledWith('session.resume', expect.objectContaining({ session_id: RUNTIME_SESSION_ID }))
+    // The fork bounds the resume with SESSION_RESUME_REQUEST_TIMEOUT_MS —
+    // routing the session's MCP servers gates the reply and outruns the
+    // generic 30s default on a multi-server install.
+    expect(requestGateway).toHaveBeenCalledWith(
+      'session.resume',
+      expect.objectContaining({ session_id: RUNTIME_SESSION_ID }),
+      SESSION_RESUME_REQUEST_TIMEOUT_MS
+    )
   })
 })
 
