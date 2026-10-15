@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-import hermes_cli.gateway as gateway
+from hermes_cli import gateway
 from hermes_cli.update_cmd_windows import _verify_relaunched_gateways_alive
 
 # ---------------------------------------------------------------------------
