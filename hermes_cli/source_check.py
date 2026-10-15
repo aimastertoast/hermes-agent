@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -239,6 +240,21 @@ def _unsupported_reason(stamp: dict, root: Path, *, explicit_root: bool, embedde
         return {"reason": "update-root-steward-owned-git-tree",
                 "message": "This installation is managed by its install method; use its updater.", "advice": "git pull"}
     return None
+
+
+def _installed_git(git: str) -> str:
+    """``git`` as given, unless it is a bare ``git`` PATH lacks: then the git ``hermes update`` runs.
+
+    A Windows source install's only git is often the copy install.ps1 staged in PM's store, which
+    is on PATH only inside ``hermes update`` (``expose_pm_git``). Desktop and the dashboard pass a
+    bare ``git`` there, it dies with WinError 2, and the check reports ``head-unavailable``, which
+    Desktop shows as "couldn't reach the update server" while ``hermes update`` works.
+    """
+    if git != "git" or shutil.which(git):
+        return git
+    from hermes_cli.update_pause_record import _git_executable
+
+    return _git_executable()
 
 
 def _read_checkout(root: Path, git: str, embedded: Optional[str]) -> _Checkout:
@@ -485,7 +501,7 @@ def check_for_updates(*, install_root: Path | None = None, home: Path | None = N
         return {**result, "reason": "disabled"}
     channel = resolve_update_channel(config, root) if channel is None else validate_name(channel)
     forward_only = rides_default_channel(channel_record(config, root), channel, root)
-    co = _read_checkout(root, git, embedded)
+    co = _read_checkout(root, _installed_git(git), embedded)
     desktop_config = _read_json(branch_config_path) if branch_config_path else None
     configured_branch = _configured_branch(desktop_config)
     selected_branch = branch or configured_branch or _checked_out_branch(co.current_branch, "main")
