@@ -685,3 +685,67 @@ def test_stable_release_the_checkout_already_contains_is_a_rollback(installation
     assert status.get("targetSha") == shas[release], status
     assert status["updateAvailable"] is True
     assert status["rollback"] is rollback
+
+
+def test_fork_local_head_counts_locally_when_github_cannot_compare(installation):
+    """A fork-local HEAD 404s the GitHub compare -- the base SHA only exists in the
+    fork -- which used to leave ``behind`` at the unknown-count sentinel and the
+    Desktop panel blind. The checkout already carries the upstream history its
+    updater fetched, so ancestry answers locally without touching the network."""
+    from hermes_cli.source_check import check_for_updates
+
+    root, _linked, home, _base, _head, responses, requests, git = installation
+    git("checkout", "-q", "-b", "local-work")
+    git("commit", "-q", "--allow-empty", "-m", "fork work")
+    git("checkout", "-q", "main")
+    git("commit", "-q", "--allow-empty", "-m", "upstream one")
+    git("commit", "-q", "--allow-empty", "-m", "upstream two")
+    tip = git("rev-parse", "main")
+    git("checkout", "-q", "local-work")
+    # Only the branch tip is served; the compare of a fork-local base is a 404
+    # (every unserved path is), like api.github.com answering for the real fork.
+    # The never-pushed branch answers 422 -- the only code the check trusts to
+    # mean a ref is gone, since a 404 could also be a private repository.
+    responses["/repos/fixture/fork/commits/local-work"] = (
+        422, {"message": "No commit found for SHA: local-work"})
+    responses["/repos/fixture/fork/commits/main"] = (200, tip)
+
+    status = check_for_updates(install_root=root, home=home, branch_config_path=home / "desktop-update.json")
+
+    assert "error" not in status, status
+    assert status["localOnly"] is True
+    assert status["behind"] == 2
+    assert [c["summary"] for c in status["commits"]] == ["upstream one", "upstream two"]
+    assert all(c["sha"] and c["author"] == "Fixture" and c["at"] > 0 for c in status["commits"])
+    # The local count answered first: no compare call was spent.
+    assert not any("/compare/" in request for request in requests)
+
+
+def test_target_tip_missing_locally_is_fetched_once_with_a_deadline(installation, tmp_path):
+    """Upstream can move past the checkout's last fetch while the fork-local HEAD
+    keeps the compare API at 404. One bounded fetch of the target branch fills
+    the gap, so the check stays answerable instead of reporting an unknown count."""
+    import subprocess as sp
+
+    from hermes_cli.source_check import check_for_updates
+
+    root, _linked, home, _base, _head, _responses, requests, git = installation
+    _bare_origin(installation)
+    bare = home / "remote.git"
+    git("checkout", "-q", "-b", "local-work")
+    git("commit", "-q", "--allow-empty", "-m", "fork work")
+    # Upstream advances in a second clone and pushes; this checkout never sees it.
+    other = tmp_path / "other"
+    sp.run(["git", "clone", "-q", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            str(bare), str(other)], check=True)
+    sp.run(["git", "-C", str(other), "commit", "-q", "--allow-empty", "-m", "upstream one"], check=True)
+    sp.run(["git", "-C", str(other), "commit", "-q", "--allow-empty", "-m", "upstream two"], check=True)
+    sp.run(["git", "-C", str(other), "push", "-q", "origin", "main"], check=True)
+
+    status = check_for_updates(install_root=root, home=home, branch_config_path=home / "desktop-update.json")
+
+    assert "error" not in status, status
+    assert status["localOnly"] is True
+    assert status["behind"] == 2
+    assert [c["summary"] for c in status["commits"]] == ["upstream one", "upstream two"]
+    assert requests == []
