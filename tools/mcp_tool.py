@@ -194,9 +194,10 @@ _SDK_HTTPX_MOD = None
 # httpx2 >= 2.12 caps a single SSE event at 1 MiB by default (2.7.0 and older had no
 # cap). Large tool catalogs arrive as ONE event — Cloudflare's ~3.7k-tool tools/list
 # is well past 1 MiB — so the parser aborts mid-stream and the SDK reports the event
-# as lost ("SSE stream ended without a response"), parking the server. Any
-# SDK-created EventSource therefore gets at least this floor; explicit caller limits
-# are respected.
+# as lost ("SSE stream ended without a response"), parking the server. The httpx-level
+# shim below covers SDK calls that leave the limit unset; mcp >= 2.0 passes its own
+# 1 MiB default explicitly, so the floor must ALSO travel through
+# ``streamable_http_client(max_sse_event_size=...)`` (see ``_streamable_http_accepts``).
 _SSE_EVENT_SIZE_FLOOR_BYTES = 64 * 1024 * 1024
 
 
@@ -260,6 +261,23 @@ def sdk_httpx():
         except Exception:  # pragma: no cover — never brick MCP for a compat shim
             logger.debug("SSE event-size floor not applied", exc_info=True)
     return _SDK_HTTPX_MOD
+
+
+def _streamable_http_accepts(kwarg: str) -> bool:
+    """Whether the *installed SDK's* ``streamable_http_client`` takes ``kwarg``.
+
+    Read from the SDK module, not this module's (test-patchable) global. mcp 2.0
+    passes its own 1 MiB default into every ``EventSource`` it opens, defeating
+    the httpx-level shim — the floor must travel through this kwarg instead.
+    """
+    try:
+        fn = importlib.import_module("mcp.client.streamable_http").streamable_http_client
+    except (ImportError, AttributeError):
+        return False
+    try:
+        return kwarg in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _client_session_accepts(kwarg: str) -> bool:

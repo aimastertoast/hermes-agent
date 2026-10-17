@@ -577,8 +577,12 @@ class MCPServerTransportMixin:
 
         @asynccontextmanager
         async def _owned_client_streams():  # the SDK skips cleanup when http_client is provided
+            # mcp 2.0 feeds its own 1 MiB SSE default to every EventSource, defeating the
+            # httpx-level floor — pass Hermes' floor explicitly where the SDK takes it.
+            sse_floor = ({"max_sse_event_size": _core._SSE_EVENT_SIZE_FLOOR_BYTES}
+                         if _core._streamable_http_accepts("max_sse_event_size") else {})
             async with _build_client(**client_kwargs) as http_client:
-                async with _core.streamable_http_client(url, http_client=http_client) as streams:
+                async with _core.streamable_http_client(url, http_client=http_client, **sse_floor) as streams:
                     yield streams
         return _owned_client_streams()
 
