@@ -35,3 +35,52 @@ docker/entrypoint.sh text eol=lf
 *.html  text eol=lf
 *.svg   text eol=lf
 *.ps1   text eol=crlf
+
+# --- Fork merge policy -------------------------------------------------------------
+# The fork's changes to these upstream-owned files are PURE INSERTIONS: the fork only
+# adds lines and never changes or removes one. Upstream rewrites these files often
+# (main.ts is the busiest file in the repo), so a routine upstream edit landed on a
+# fork line and the 3-way merge conflicted - which aborted `hermes update` and showed
+# the GUI's "Update failed (exit 1)" banner.
+#
+# `merge=union` resolves such a conflict the way the fork's delta must be resolved:
+# upstream's version of the file, plus the lines the fork added. Both sides' content
+# survives, and neither side is silently dropped. It is git-native - no updater code,
+# no change to any upstream file, and it applies to every merge path (the updater's
+# own merge, a manual `git merge`, the orchestrator's).
+#
+# The union driver is only safe while the fork's delta on a file stays a pure
+# insertion. The moment the fork CHANGES or REMOVES a line there, union would keep
+# upstream's line and the fork's added block beside it - a duplicate declaration, or
+# a fork change silently dropped. tests/hermes_cli/test_fork_merge_policy.py fails
+# when that invariant breaks, and a file that leaves the list must be removed from it.
+#
+# Files whose fork delta modifies upstream lines are deliberately ABSENT: they keep
+# the loud conflict, which is the only safe outcome for a genuine overlap.
+/apps/desktop/electron/main.ts merge=union
+/apps/desktop/electron/preload.ts merge=union
+/apps/desktop/src/api/client.ts merge=union
+/apps/desktop/src/app/settings/about-settings.test.tsx merge=union
+/apps/desktop/src/app/settings/about-settings.tsx merge=union
+/apps/desktop/src/app/settings/config-settings.test.tsx merge=union
+/apps/desktop/src/app/settings/model-settings.test.tsx merge=union
+/apps/desktop/src/app/settings/model-settings.tsx merge=union
+/apps/desktop/src/app/settings/profile-scope.test.tsx merge=union
+/apps/desktop/src/components/update-status.tsx merge=union
+/apps/desktop/src/global.d.ts merge=union
+/apps/desktop/src/plugins/hermes-bots/group-external-writes.test.ts merge=union
+/apps/desktop/src/plugins/hermes-bots/routing.ts merge=union
+/apps/desktop/src/store/updates.test.ts merge=union
+/apps/desktop/src/types/hermes.ts merge=union
+/gateway/run.py merge=union
+/gateway/status.py merge=union
+/hermes_cli/main.py merge=union
+/hermes_cli/subcommands/update.py merge=union
+/hermes_cli/update_completion.py merge=union
+/hermes_cli/update_contract.py merge=union
+/scripts/desktop-update/windows.ps1 merge=union
+/tests/gateway/test_gateway_command_line_matcher.py merge=union
+/tests/hermes_cli/test_source_channel_integration.py merge=union
+/tests/hermes_cli/test_update_contract.py merge=union
+/tests/tools/test_mcp_tool.py merge=union
+/tools/mcp_tool.py merge=union
