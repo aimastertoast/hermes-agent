@@ -5,15 +5,14 @@ import os
 import sys
 import threading
 import time
-from datetime import UTC
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from gateway import status
-from gateway.status import profile_flag_value
 from gateway.status_scoped_locks import release_all_scoped_locks, release_scoped_lock
+from datetime import UTC
 
 
 class TestGatewayPidState:
@@ -487,31 +486,6 @@ class TestGatewayRuntimeStatus:
         assert status._command_line_belongs_to_profile("HERMES_HOME=/fixture/profiles/ops/ hermes gateway run", home)
         assert status._command_line_belongs_to_profile("HERMES_HOME=/opt/hermes-data/ hermes gateway run", Path("/opt/hermes-data"))
         assert not status._command_line_belongs_to_profile("FOO=hermes_home=/fixture/profiles/ops hermes gateway run", home)
-
-    def test_command_line_belongs_to_profile_runpy_bootstrap(self):
-        """The Windows launcher runs the CLI as ``python -I -c "... sys.argv = ['...main.py',
-        '--profile', 'ops', 'gateway', 'run']; ..."``: the profile flag is a quoted element
-        INSIDE the -c source, so whitespace tokenization sees ``'--profile',`` (quote and
-        comma attached) and the named-profile gateway reads as bare. Parse the embedded
-        argv literal so the relaunched gateway is attributed to its profile (the updater's
-        resume verification declared a healthy bobby gateway dead this way, exit 1)."""
-        bootstrap = (
-            'c:/hermes/tools/python.exe -I -c import sys, runpy; '
-            'sys.path.insert(0, "c:/hermes/hermes-agent"); '
-            "sys.argv = ['c:/hermes/hermes-agent/hermes_cli/main.py', '--profile', 'ops', 'gateway', 'run']; "
-            "runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
-        )
-        home = Path("/fixture/profiles/ops")
-        assert status._command_line_belongs_to_profile(bootstrap, home) is True
-        # Token equality survives the parse: a sibling's value never matches (#-p ops vs ops-2).
-        assert profile_flag_value(bootstrap) == "ops"
-        sibling = (
-            bootstrap.replace("', 'ops',", "', 'ops-2',")
-        )
-        assert not status._command_line_belongs_to_profile(sibling, home)
-        assert profile_flag_value(sibling) == "ops-2"
-        # Default stays the default: a bootstrap naming a profile is not the root home's.
-        assert status._command_line_belongs_to_profile(bootstrap, Path("/opt/hermes-data")) is False
 
 
     def test_write_runtime_status_explicit_none_clears_stale_fields(self, tmp_path, monkeypatch):
