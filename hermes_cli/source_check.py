@@ -1,8 +1,6 @@
 """Passive source update decisions for one exact installation and profile.
 
-No lock repair and no Git writes, with one exception: a bounded fetch of the
-target branch when the check cannot count a ``behind`` any other way.
-Desktop, CLI, and dashboard share this owner.
+No fetch, lock repair, or Git writes. Desktop, CLI, and dashboard share this owner.
 """
 from __future__ import annotations
 
@@ -26,8 +24,6 @@ logger = logging.getLogger(__name__)
 UPDATE_AVAILABLE_NO_COUNT = -1
 _UPDATE_CHECK_CACHE_SECONDS = 24 * 3600
 _UPDATE_CHECK_FAILURE_CACHE_SECONDS = 3600
-_LOCAL_COMMIT_LIMIT = 250
-_LOCAL_FETCH_TIMEOUT_S = 30
 
 
 def _quiet(fn, default=None):
@@ -154,7 +150,6 @@ def _branch_tip(repository: str | None, branch: str, root: Path, git: str,
     # A successful empty ref advertisement alone proves a branch was deleted.
     # GitHub 404 can also mean a private repository: it must not heal a branch.
     failure = None
-    absent = False
     if repository:
         from hermes_cli.github_api import describe_github_failure, github_token
         try:
@@ -163,19 +158,10 @@ def _branch_tip(repository: str | None, branch: str, root: Path, git: str,
         except Exception as exc:
             sha = None
             failure = describe_github_failure(exc, authenticated=github_token() is not None)
-            # 422 ("No commit found for SHA: <ref>") is only sent once GitHub has
-            # resolved the repository, so unlike 404 -- which a private repository
-            # also returns -- it does mean this ref is gone. Trusting it keeps a
-            # slow link from undoing the answer: when `ls-remote` times out it
-            # reports the branch as still present, and every caller then reads
-            # a long-deleted branch as reachable.
-            absent = isinstance(exc, urllib.error.HTTPError) and exc.code == 422
         if _is_full_sha(sha):
             return sha, False, None
         if failure is None:
             failure = "api.github.com returned no commit for the branch."
-        if absent:
-            return None, True, None
         if branch == "main" and remote == "origin":
             return None, False, failure
     result = _git_run(["ls-remote", "--exit-code", "--heads", remote, f"refs/heads/{branch}"],
@@ -372,66 +358,16 @@ def _unhealable_reason(co: _Checkout, branch: str) -> Optional[str]:
     return "unmerged"  # Unknown merge state keeps the branch.
 
 
-def _local_behind(co: _Checkout, target: str, *,
-                  fetch_from: Optional[tuple[str, str]] = None) -> Optional[tuple[int, list[dict]]]:
-    """``(behind, commits)`` counted from local objects, or None when ``target`` is unknown here.
-
-    A fork-local HEAD breaks the GitHub compare: the base SHA only exists in the
-    fork, so api.github.com answers 404. But this checkout still carries the
-    upstream history its updater fetched, and ancestry answers locally without
-    touching the network. ``fetch_from=(remote, branch)`` permits exactly one
-    bounded fetch when even the tip is missing, for the window between an
-    upstream push and the checkout's next update.
-    """
-    if co.embedded:
-        return None
-    commit = f"{target}^{{commit}}"
-    if not _git_ok(["cat-file", "-e", commit], cwd=co.root, git=co.git):
-        if fetch_from is None or not _git_ok(
-                ["fetch", "--no-tags", "--quiet", fetch_from[0], fetch_from[1]],
-                cwd=co.root, git=co.git, timeout=_LOCAL_FETCH_TIMEOUT_S):
-            return None
-        if not _git_ok(["cat-file", "-e", commit], cwd=co.root, git=co.git):
-            return None
-    count = _git_count(["rev-list", "--count", f"{co.head}..{target}"], cwd=co.root)
-    if count is None:
-        return None
-    if count == 0:
-        return 0, []
-    rows = []
-    result = _git_run(["log", f"--max-count={_LOCAL_COMMIT_LIMIT}", "--format=%H%x1f%at%x1f%an%x1f%s",
-                       f"{co.head}..{target}"], cwd=co.root, git=co.git, timeout=10)
-    if result is not None and result.returncode == 0:
-        for line in result.stdout.splitlines():
-            parts = line.split("\x1f", 3)
-            if len(parts) != 4:
-                continue
-            sha, at, author, summary = parts
-            rows.append({"sha": sha, "summary": summary, "author": author,
-                         "at": _quiet(lambda: int(at) * 1000, 0)})
-    return count, rows[::-1]
-
-
-def _behind_count(co: _Checkout, target: str, *,
-                  fetch_from: Optional[tuple[str, str]] = None) -> tuple[int, list[dict]]:
-    """``(behind, commits)`` for ``target``: local ancestry, then local objects, then the GitHub compare API."""
+def _behind_count(co: _Checkout, target: str) -> tuple[int, list[dict]]:
+    """``(behind, commits)`` for ``target``: local ancestry first, then the GitHub compare API."""
     if co.head == target or (not co.embedded and _git_ok(
             ["merge-base", "--is-ancestor", target, co.head], cwd=co.root, git=co.git)):
         return 0, []
-    # Order matters: the bounded fetch is last resort, spent only when neither
-    # local objects nor the compare API can answer. A worktree checking a
-    # remote-only tip must reach the compare, not attempt a ref-writing fetch.
-    local = _local_behind(co, target)
-    if local is not None:
-        return local
     if co.repository:
         payload = _github_compare(co.head, target, co.repository)
         ahead = (payload or {}).get("ahead_by")
         if isinstance(ahead, int) and not isinstance(ahead, bool) and ahead >= 0:
             return ahead, (_quiet(lambda: _commits(payload), []) if ahead else [])
-    local = _local_behind(co, target, fetch_from=fetch_from)
-    if local is not None:
-        return local
     return UPDATE_AVAILABLE_NO_COUNT, []
 
 
@@ -441,34 +377,24 @@ def _check_branch(result: dict, co: _Checkout, selected_branch: str, *,
     result["branch"] = selected_branch
     remote = _branch_remote(co, selected_branch)
     target, missing, failure = _branch_tip(co.repository, selected_branch, co.root, co.git, remote)
-    target_branch = selected_branch
     reason = _unhealable_reason(co, selected_branch) if missing and selected_branch != "main" else None
     if reason:
-        # The pin stays -- never heal away work the remote never had -- but the
-        # comparison target becomes main: `hermes update` merges origin/main into
-        # this branch in place, so that is what "behind" has to mean. Returning an
-        # error here made the Desktop render "couldn't reach the update server"
-        # (it maps every error to that line) on every check of a fork install.
         detail = ("has never been pushed" if reason == "never-pushed"
                   else "is gone from the remote but has commits that are not in main")
-        result.update(localOnly=True,
+        result.update(error="branch-local-only", localOnly=True,
                       message=f"Branch '{selected_branch}' {detail}; keeping it instead of switching to main.")
-        target, _, failure = _branch_tip(co.repository, "main", co.root, co.git, remote if co.embedded else "origin")
-        target_branch = "main"
-    elif missing and selected_branch != "main":
+        return
+    if missing and selected_branch != "main":
         result["branch"] = "main"
         if heal:
             _heal_deleted_branch(*heal)
         target, _, failure = _branch_tip(co.repository, "main", co.root, co.git, remote if co.embedded else "origin")
-        target_branch = "main"
     if target is None:
         result.update(error="fetch-failed",
                       message=f"Could not resolve the remote branch tip: {failure}" if failure
                       else "Could not resolve the remote branch tip.")
         return
-    # The fetch fallback must fetch the branch the target came from -- after the
-    # localOnly fallback that is main, never the unpinned branch itself.
-    behind, commits = _behind_count(co, target, fetch_from=(remote, target_branch))
+    behind, commits = _behind_count(co, target)
     result["commits"] = commits
     result.update(targetSha=target, behind=behind, updateAvailable=behind != 0)
 

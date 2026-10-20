@@ -4,8 +4,9 @@
 (exit 1 — the Desktop's "Update failed (exit 1)" banner). A conflict is per-HUNK, so every
 line the fork keeps in an upstream-owned file is a line upstream has to edit in the same
 place to stop the update. The fork's code therefore lives in fork-owned modules
-(``hermes_cli/update_cmd_fork.py``, ``hermes_cli/update_transient_retry.py``) and only
-thin call sites stay in ``hermes_cli/update_cmd.py``.
+(``hermes_cli/update_cmd_fork.py``, ``hermes_cli/update_transient_retry.py``,
+``hermes_cli/update_receipt_fork.py``, ``hermes_cli/source_check_fork.py``) and only
+thin call sites stay in the upstream-owned files.
 
 Measured against the merge base of HEAD and ``origin/main`` — the base the next merge will
 actually use. Measuring against ``origin/main`` itself would count upstream's own newer
@@ -29,6 +30,8 @@ REPO = Path(__file__).resolve().parents[2]
 TARGET = "hermes_cli/update_cmd.py"
 GIT_TARGET = "hermes_cli/update_cmd_git.py"
 RECEIPT_TARGET = "hermes_cli/update_receipt.py"
+SOURCE_CHECK_TARGET = "hermes_cli/source_check.py"
+SOURCE_CHECK_TEST_TARGET = "tests/hermes_cli/test_source_check.py"
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
@@ -50,6 +53,13 @@ GIT_MAX_DELETED = 0
 # the verification section) lives in ``hermes_cli/update_receipt_fork.py`` instead.
 RECEIPT_MAX_ADDED = 0
 RECEIPT_MAX_DELETED = 0
+
+# ``hermes_cli/source_check.py`` and its test file must carry NO fork delta either.
+# The fork's update-check behavior (a local-only branch is a pin, not an error) lives in
+# ``hermes_cli/source_check_fork.py``; upstream's file must stay byte-identical so the
+# merge never has to touch the branch-comparison code upstream keeps rewriting.
+SOURCE_CHECK_MAX_ADDED = 0
+SOURCE_CHECK_MAX_DELETED = 0
 
 # Functions the fork moved OUT of the upstream-owned file. Re-defining one of them inline
 # puts fork code back into a merge-conflict magnet.
@@ -82,7 +92,14 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
 
 @cache
 def _fork_delta(path: str = TARGET) -> tuple[int, int] | None:
-    """``(added, deleted)`` for the fork's delta on ``path``, or None without a ref."""
+    """``(added, deleted)`` for the fork's delta on ``path``, or None without a ref.
+
+    A file the fork does not touch produces NO numstat line at all, so an
+    unchanged file is ``(0, 0)`` -- not ``None``. ``None`` means only "there is
+    no upstream ref to measure against", i.e. the ratchet cannot run; returning
+    it for an unchanged file would make every zero-delta ratchet skip itself
+    forever and never actually assert anything.
+    """
     ref = next(
         (r for r in ("origin/main",) if _git("rev-parse", "--verify", "--quiet", r).returncode == 0),
         None,
@@ -101,7 +118,7 @@ def _fork_delta(path: str = TARGET) -> tuple[int, int] | None:
         added, deleted, changed = parts
         if changed == path and added.isdigit() and deleted.isdigit():
             return int(added), int(deleted)
-    return None
+    return (0, 0)
 
 
 def test_update_cmd_fork_delta_stays_within_budget() -> None:
@@ -200,6 +217,53 @@ def test_moved_receipt_symbols_are_not_redefined_in_update_receipt() -> None:
         )
 
 
+def test_source_check_fork_delta_stays_at_zero() -> None:
+    """``source_check.py`` must stay byte-identical to upstream's.
+
+    The fork's update-check behavior (a local-only branch is a pin, not an error)
+    lives in ``hermes_cli/source_check_fork.py``, which swaps ONE upstream symbol
+    for the duration of a check. Upstream's own file must carry no fork lines:
+    it is the file upstream keeps editing, so every fork line is a collision.
+    """
+    delta = _fork_delta(SOURCE_CHECK_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= SOURCE_CHECK_MAX_DELETED, (
+        f"{SOURCE_CHECK_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {SOURCE_CHECK_MAX_DELETED}). Restore upstream's content and move the fork's "
+        f"code into hermes_cli/source_check_fork.py."
+    )
+    assert added <= SOURCE_CHECK_MAX_ADDED, (
+        f"{SOURCE_CHECK_TARGET}: the fork now adds {added} line(s) to upstream's file (budget "
+        f"{SOURCE_CHECK_MAX_ADDED}). Even a pure insertion is a hunk upstream can collide with. "
+        f"Move the fork's code into hermes_cli/source_check_fork.py."
+    )
+
+
+def test_source_check_test_file_fork_delta_stays_at_zero() -> None:
+    """Upstream's own test file must stay byte-identical too.
+
+    The fork's variants of upstream's assertions (a local-only branch is NOT an
+    error) live in ``tests/hermes_cli/test_source_check_fork.py``; upstream's file
+    must keep testing upstream's own behavior, byte for byte.
+    """
+    delta = _fork_delta(SOURCE_CHECK_TEST_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= SOURCE_CHECK_MAX_DELETED, (
+        f"{SOURCE_CHECK_TEST_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {SOURCE_CHECK_MAX_DELETED}). Restore upstream's content and move the fork's "
+        f"tests into tests/hermes_cli/test_source_check_fork.py."
+    )
+    assert added <= SOURCE_CHECK_MAX_ADDED, (
+        f"{SOURCE_CHECK_TEST_TARGET}: the fork now adds {added} line(s) to upstream's file "
+        f"(budget {SOURCE_CHECK_MAX_ADDED}). Move the fork's tests into "
+        f"tests/hermes_cli/test_source_check_fork.py."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
@@ -207,5 +271,7 @@ def test_fork_modules_exist() -> None:
         "hermes_cli/update_transient_retry.py",
         "hermes_cli/update_git_timeout.py",
         "hermes_cli/update_receipt_fork.py",
+        "hermes_cli/source_check_fork.py",
+        "tests/hermes_cli/test_source_check_fork.py",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
