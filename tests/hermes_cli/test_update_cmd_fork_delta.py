@@ -109,6 +109,16 @@ def _fork_delta(path: str = TARGET) -> tuple[int, int] | None:
     base = _git("merge-base", "HEAD", ref).stdout.strip()
     if not base:
         return None
+    # An unchanged file produces no numstat row -- and so does a path that does
+    # not exist at all. Without this check a typo in the target path (or an
+    # upstream rename) would make the ratchet assert 0 <= 0 and pass forever
+    # while measuring nothing.
+    if _git("cat-file", "-e", f"{base}:{path}").returncode != 0:
+        raise AssertionError(
+            f"{path} does not exist in the merge base {base}: the ratchet would measure "
+            f"nothing and pass. Upstream renamed or removed the file, or the target path "
+            f"is wrong -- point the ratchet at the file's new name."
+        )
     result = _git("diff", "--numstat", base, "--", path)
     assert result.returncode == 0, result.stderr
     for line in result.stdout.splitlines():

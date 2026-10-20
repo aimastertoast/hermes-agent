@@ -45,10 +45,15 @@ _LOCAL_COMMIT_LIMIT = 250
 #: The one bounded fetch the local count may spend when the target is unknown here.
 _LOCAL_FETCH_TIMEOUT_S = 30
 
-#: The swap below is process-wide for the duration of one check, so checks run
-#: one at a time: two threads must not restore the symbol under each other.
-#: Re-entrant, so a same-thread re-entry cannot deadlock on it.
-_CHECK_LOCK = threading.RLock()
+#: The swap below is process-wide for the duration of one check, so concurrent
+#: checks must not restore the symbol under each other. A reference count, not
+#: a lock held across the check: a check can block for tens of seconds (network
+#: plus git), and a lock held that long would make every later check wait
+#: behind a hung one. The lock below only guards the counter itself.
+_CHECK_LOCK = threading.Lock()
+_CHECK_DEPTH = 0
+#: Upstream's own ``_check_branch``, captured when the swap is installed.
+_CHECK_ORIGINAL: Optional[object] = None
 
 
 def _branch_tip(repository: str | None, branch: str, root: Path, git: str,
@@ -97,6 +102,23 @@ def _branch_tip(repository: str | None, branch: str, root: Path, git: str,
                                     else f"`git ls-remote {remote}` returned no tip.")
 
 
+def _rev_list_count(co, rev_range: str) -> Optional[int]:
+    """``git rev-list --count`` over ``rev_range``, run with the INSTALLED git.
+
+    Upstream's ``_git_count`` takes no ``git`` argument, so it runs the bare
+    ``git`` from PATH. Every other probe in this module passes ``git=co.git``
+    -- the copy upstream resolves for an install without system Git -- so this
+    one probe was the only one that failed there, and it failed the WHOLE local
+    count: the behind-count fell back to the unknown sentinel on exactly the
+    installs the fork targets.
+    """
+    result = source_check._git_run(["rev-list", "--count", rev_range],
+                                    cwd=co.root, git=co.git, timeout=10)
+    if result is None or result.returncode != 0:
+        return None
+    return source_check._quiet(lambda: int(result.stdout.strip()), None)
+
+
 def _local_behind(co, target: str, *,
                   fetch_from: Optional[tuple[str, str]] = None) -> Optional[tuple[int, list[dict]]]:
     """``(behind, commits)`` counted from local objects, or None when ``target`` is unknown here.
@@ -118,7 +140,7 @@ def _local_behind(co, target: str, *,
             return None
         if not source_check._git_ok(["cat-file", "-e", commit], cwd=co.root, git=co.git):
             return None
-    count = source_check._git_count(["rev-list", "--count", f"{co.head}..{target}"], cwd=co.root)
+    count = _rev_list_count(co, f"{co.head}..{target}")
     if count is None:
         return None
     if count == 0:
@@ -208,24 +230,33 @@ def _check_branch(result: dict, co, selected_branch: str, *,
 def _fork_branch_check():
     """Run one check with the fork's branch check in place of upstream's.
 
-    The swap is scoped to the call and guarded by a lock: upstream's
+    The swap is scoped to the call and guarded by a reference count: upstream's
     ``check_for_updates`` looks ``_check_branch`` up in its own module, so this
     is the only seam that reaches the fork's behavior without editing
-    upstream's file.
+    upstream's file. Concurrent checks share one swap -- the last one out
+    restores upstream's symbol -- and a check that hangs holds nothing but the
+    counter, so a later check is never blocked behind it.
 
-    The swap is process-wide, not thread-local: for the duration of the call a
+    The swap is process-wide, not thread-local: for the duration of a check a
     direct ``source_check.check_for_updates`` from another thread would also
     get the fork's branch check. In this repo nothing calls it directly but
     this module (the three production call sites point here), and the fork's
     check differs from upstream's only in how a local-only branch is answered.
     """
+    global _CHECK_DEPTH, _CHECK_ORIGINAL
     with _CHECK_LOCK:
-        original = source_check._check_branch
-        source_check._check_branch = _check_branch
-        try:
-            yield
-        finally:
-            source_check._check_branch = original
+        if _CHECK_DEPTH == 0:
+            _CHECK_ORIGINAL = source_check._check_branch
+            source_check._check_branch = _check_branch
+        _CHECK_DEPTH += 1
+    try:
+        yield
+    finally:
+        with _CHECK_LOCK:
+            _CHECK_DEPTH -= 1
+            if _CHECK_DEPTH == 0 and _CHECK_ORIGINAL is not None:
+                source_check._check_branch = _CHECK_ORIGINAL
+                _CHECK_ORIGINAL = None
 
 
 def check_for_updates(**kwargs) -> dict:

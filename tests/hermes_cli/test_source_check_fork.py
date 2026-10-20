@@ -16,6 +16,7 @@ checkout, the bare origin and the commit helper are upstream's, and copying
 them would let the fork's copy drift from the one upstream actually runs.
 """
 import json
+import shutil
 import subprocess
 import urllib.error
 
@@ -241,6 +242,43 @@ def test_fork_local_head_counts_locally_when_github_cannot_compare(installation)
     assert [c["summary"] for c in status["commits"]] == ["upstream one", "upstream two"]
     assert all(c["sha"] and c["author"] == "Fixture" and c["at"] > 0 for c in status["commits"])
     # The local count answered first: no compare call was spent.
+    assert not any("/compare/" in request for request in requests)
+
+
+def test_local_count_uses_the_installed_git_not_the_one_on_path(installation, monkeypatch):
+    """The local count must not depend on ``git`` being on PATH.
+
+    Upstream's ``_git_count`` takes no ``git`` argument, so it runs the bare
+    ``git`` from PATH. The fork's count runs the INSTALLED git (``co.git``) --
+    the copy upstream resolves for a Windows install whose only git is PM's
+    store copy. There the bare probe was the ONLY one that failed, and it
+    failed the whole count: the behind-count fell back to the unknown sentinel
+    on exactly the installs the fork targets.
+    """
+    from hermes_cli.source_check_fork import check_for_updates
+
+    root, _linked, home, _base, _head, responses, requests, git = installation
+    installed_git = shutil.which("git")
+    assert installed_git, "the test needs a git on PATH to begin with"
+    git("checkout", "-q", "-b", "local-work")
+    git("commit", "-q", "--allow-empty", "-m", "fork work")
+    git("checkout", "-q", "main")
+    git("commit", "-q", "--allow-empty", "-m", "upstream one")
+    git("commit", "-q", "--allow-empty", "-m", "upstream two")
+    tip = git("rev-parse", "main")
+    git("checkout", "-q", "local-work")
+    responses["/repos/fixture/fork/commits/local-work"] = (
+        422, {"message": "No commit found for SHA: local-work"})
+    responses["/repos/fixture/fork/commits/main"] = (200, tip)
+    # The install's git is known by path; PATH no longer has one.
+    monkeypatch.setenv("PATH", "")
+
+    status = check_for_updates(install_root=root, home=home,
+                                branch_config_path=home / "desktop-update.json",
+                                git=installed_git)
+
+    assert "error" not in status, status
+    assert status["behind"] == 2
     assert not any("/compare/" in request for request in requests)
 
 
