@@ -1,18 +1,19 @@
 """Tests for the pipeline receipt contract (Task 3 of the update-permanent-fix plan).
 
-The new pipeline types live alongside the legacy ``UpdateReceipt`` class in
-``hermes_cli/update_receipt.py``. They are deliberately named
-``UpdateReceiptRecord`` / ``write_pipeline_receipt`` /
-``read_latest_pipeline_receipt`` / ``acknowledge_pipeline_receipt`` so the
-dozens of existing imports of ``UpdateReceipt`` and ``read_latest_receipt()``
-keep working. These tests exercise the new pipeline only.
+The pipeline types live in the fork-owned ``hermes_cli/update_receipt_fork.py``
+(they used to sit in ``hermes_cli/update_receipt.py``, which upstream owns and
+rewrites often). They are deliberately named ``UpdateReceiptRecord`` /
+``write_pipeline_receipt`` / ``read_latest_pipeline_receipt`` /
+``acknowledge_pipeline_receipt`` so the dozens of existing imports of
+``UpdateReceipt`` and ``read_latest_receipt()`` keep working. These tests
+exercise the new pipeline only.
 """
 import json
 import secrets
 
 import pytest
 
-from hermes_cli.update_receipt import (
+from hermes_cli.update_receipt_fork import (
     UpdateReceiptRecord,
     acknowledge_pipeline_receipt,
     latest_pipeline_receipt_summary,
@@ -273,7 +274,7 @@ class TestPipelineReceiptPathTraversal:
     def test_acknowledge_accepts_valid_token_hex_id(self, isolated_hermes_home):
         """Sanity: a real ``secrets.token_hex(8)`` id is still accepted —
         the guard doesn't break the happy path."""
-        from hermes_cli.update_receipt import UpdateReceiptRecord, write_pipeline_receipt
+        from hermes_cli.update_receipt_fork import UpdateReceiptRecord, write_pipeline_receipt
 
         home = isolated_hermes_home
         receipt = UpdateReceiptRecord(
@@ -425,7 +426,7 @@ class TestPipelineReceiptProfileScoping:
 
     def test_summary_inherits_profile_isolation(self, tmp_path):
         """Summary reads follow the same per-home scoping rule."""
-        from hermes_cli.update_receipt import latest_pipeline_receipt_summary
+        from hermes_cli.update_receipt_fork import latest_pipeline_receipt_summary
 
         home_a = tmp_path / "profile-a"
         home_b = tmp_path / "profile-b"

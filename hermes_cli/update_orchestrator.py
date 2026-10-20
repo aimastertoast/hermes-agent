@@ -43,22 +43,22 @@ from subprocess import run as _subprocess_run
 # Re-exported into the orchestrator's namespace so tests can monkeypatch them
 # by attribute name on the module (``monkeypatch.setattr(
 # "hermes_cli.update_orchestrator.capture_pre_state", ...))``).
-from hermes_cli.update_snapshot import (  # noqa: F401 — re-exported
+from hermes_cli.update_snapshot import (  # re-exported: tests monkeypatch these by name
     UpdateSnapshot,
     capture_pre_state,
     restore_from_snapshot,
     _read_schema_version,
 )
-from hermes_cli.update_receipt import (  # noqa: F401 — re-exported
+from hermes_cli.update_receipt_fork import (  # re-exported: tests monkeypatch these by name
     UpdateReceiptRecord,
     write_pipeline_receipt,
 )
-from hermes_cli.update_merge_strategy import (  # noqa: F401 — re-exported
+from hermes_cli.update_merge_strategy import (  # re-exported: tests monkeypatch these by name
     backup_branch,
     attempt_merge,
     MergeResult,
 )
-from hermes_cli.update_gateway_swap import GatewaySwapResult  # noqa: F401 — re-exported
+from hermes_cli.update_gateway_swap import GatewaySwapResult  # re-exported
 from hermes_cli.update_classifier import classify_safe
 
 logger = logging.getLogger(__name__)
@@ -136,19 +136,19 @@ def _check_preflight(repo: Path) -> tuple[bool, str]:
     """
     status = _subprocess_run(
         ["git", "-C", str(repo), "status", "--porcelain"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if status.stdout.strip():
         return False, ERR_WORKING_TREE_DIRTY
     branch = _subprocess_run(
         ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if branch.stdout.strip() == "HEAD":
         return False, ERR_DETACHED_HEAD
     remote = _subprocess_run(
         ["git", "-C", str(repo), "remote", "get-url", "origin"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     if remote.returncode != 0:
         return False, ERR_NO_ORIGIN

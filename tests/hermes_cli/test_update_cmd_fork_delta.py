@@ -28,6 +28,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 TARGET = "hermes_cli/update_cmd.py"
 GIT_TARGET = "hermes_cli/update_cmd_git.py"
+RECEIPT_TARGET = "hermes_cli/update_receipt.py"
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
@@ -43,12 +44,30 @@ MAX_DELETED = 0
 GIT_MAX_ADDED = 20
 GIT_MAX_DELETED = 0
 
+# ``update_receipt.py`` must carry NO fork delta at all. Upstream rewrites it constantly,
+# so even a pure insertion is a hunk a future merge can trip over: the pipeline receipt
+# contract (the typed ``UpdateReceiptRecord``, the atomic write/read/acknowledge helpers,
+# the verification section) lives in ``hermes_cli/update_receipt_fork.py`` instead.
+RECEIPT_MAX_ADDED = 0
+RECEIPT_MAX_DELETED = 0
+
 # Functions the fork moved OUT of the upstream-owned file. Re-defining one of them inline
 # puts fork code back into a merge-conflict magnet.
 MOVED_OUT = (
     "_cmd_update_via_orchestrator",
     "_orchestrator_outcome_to_exit_code",
     "_remote_has_branch",
+)
+
+# The pipeline receipt contract, moved out of ``hermes_cli/update_receipt.py``.
+RECEIPT_MOVED_OUT = (
+    "UpdateReceiptRecord",
+    "write_pipeline_receipt",
+    "read_latest_pipeline_receipt",
+    "acknowledge_pipeline_receipt",
+    "read_latest_pipeline_receipt_dict",
+    "latest_pipeline_receipt_summary",
+    "record_verification",
 )
 
 
@@ -143,11 +162,50 @@ def test_moved_fork_functions_are_not_redefined_in_update_cmd() -> None:
         )
 
 
+def test_update_receipt_fork_delta_stays_at_zero() -> None:
+    """``update_receipt.py`` must stay byte-identical to upstream's.
+
+    Upstream rewrites this file constantly; the fork's pipeline receipt contract lives in
+    ``hermes_cli/update_receipt_fork.py``, so this file must carry no fork lines at all.
+    """
+    delta = _fork_delta(RECEIPT_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= RECEIPT_MAX_DELETED, (
+        f"{RECEIPT_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {RECEIPT_MAX_DELETED}). Restore upstream's content and move the fork's "
+        f"code into hermes_cli/update_receipt_fork.py."
+    )
+    assert added <= RECEIPT_MAX_ADDED, (
+        f"{RECEIPT_TARGET}: the fork now adds {added} line(s) to upstream's file (budget "
+        f"{RECEIPT_MAX_ADDED}). Even a pure insertion is a hunk upstream can collide with. "
+        f"Move the fork's code into hermes_cli/update_receipt_fork.py."
+    )
+
+
+def test_moved_receipt_symbols_are_not_redefined_in_update_receipt() -> None:
+    """The pipeline receipt contract must stay out of the upstream-owned file."""
+    tree = ast.parse((REPO / RECEIPT_TARGET).read_text(encoding="utf-8"))
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    for name in RECEIPT_MOVED_OUT:
+        assert name not in defined, (
+            f"{name} is defined inside {RECEIPT_TARGET} again. It belongs in "
+            f"hermes_cli/update_receipt_fork.py: a definition in an upstream-owned file is a "
+            f"merge-conflict magnet."
+        )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
         "hermes_cli/update_cmd_fork.py",
         "hermes_cli/update_transient_retry.py",
         "hermes_cli/update_git_timeout.py",
+        "hermes_cli/update_receipt_fork.py",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"

@@ -470,7 +470,7 @@ def _read_latest_receipt() -> Optional[dict[str, Any]]:
     """
     try:
         from hermes_constants import get_hermes_home
-        from hermes_cli.update_receipt import read_latest_pipeline_receipt_dict
+        from hermes_cli.update_receipt_fork import read_latest_pipeline_receipt_dict
 
         return read_latest_pipeline_receipt_dict(get_hermes_home())
     except Exception:
@@ -560,7 +560,7 @@ async def acknowledge_update_receipt(receipt_id: str, profile: Optional[str] = N
     with _config_profile_scope(profile):
         try:
             from hermes_constants import get_hermes_home
-            from hermes_cli.update_receipt import acknowledge_pipeline_receipt
+            from hermes_cli.update_receipt_fork import acknowledge_pipeline_receipt
 
             ok = acknowledge_pipeline_receipt(get_hermes_home(), receipt_id)
         except Exception:

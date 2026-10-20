@@ -240,7 +240,7 @@ class TestRolledBackRequiresResetOk:
 
         recorded = {}
         monkeypatch.setattr(
-            "hermes_cli.update_receipt.record_verification",
+            "hermes_cli.update_receipt_fork.record_verification",
             lambda checks, rolled_back, failed_check: recorded.update(
                 rolled_back=rolled_back, failed_check=failed_check))
 

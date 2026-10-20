@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from hermes_cli.update_orchestrator import run_update, UpdateOutcome
-from hermes_cli.update_receipt import read_latest_pipeline_receipt
+from hermes_cli.update_receipt_fork import read_latest_pipeline_receipt
 from hermes_cli.tests.update.conftest import FakeGatewayProcess
 
 
@@ -38,10 +38,10 @@ class _FakePopen:
 
     pid = 12345
 
-    def kill(self) -> None:  # noqa: D401 — match subprocess.Popen signature
+    def kill(self) -> None:
         return None
 
-    def wait(self) -> None:  # noqa: D401
+    def wait(self) -> None:
         return None
 
 

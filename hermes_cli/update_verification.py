@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import yaml
 
@@ -36,10 +36,10 @@ LIVENESS_POLL_INTERVAL_SECONDS = 2.0
 PRE_STATE_FILENAME = "pre-state-latest.json"
 
 
-def _mcp_fingerprint(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _mcp_fingerprint(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """names + enabled + command/url. Secret values (env, args, headers) never
     enter the fingerprint."""
-    fingerprint: Dict[str, Dict[str, Any]] = {}
+    fingerprint: dict[str, dict[str, Any]] = {}
     for name, server in (config.get("mcp_servers") or {}).items():
         if not isinstance(server, dict):
             continue
@@ -51,7 +51,7 @@ def _mcp_fingerprint(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return fingerprint
 
 
-def _read_raw_config(config_path: Path) -> Dict[str, Any]:
+def _read_raw_config(config_path: Path) -> dict[str, Any]:
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
@@ -59,7 +59,7 @@ def _read_raw_config(config_path: Path) -> Dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _read_gateway_state() -> Dict[str, Any]:
+def _read_gateway_state() -> dict[str, Any]:
     from hermes_constants import get_hermes_home
     try:
         state = json.loads(
@@ -69,7 +69,7 @@ def _read_gateway_state() -> Dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
-def _listener_port(state: Dict[str, Any]) -> Optional[int]:
+def _listener_port(state: dict[str, Any]) -> Optional[int]:
     webhook = (state.get("platforms") or {}).get("webhook") or {}
     base = webhook.get("listener_base") or ""
     try:
@@ -112,7 +112,7 @@ def _head_sha(checkout: Optional[Path] = None) -> str:
         return ""
 
 
-def capture_pre_state(homes: List[Tuple[str, Path]], *, backup: bool = True) -> Dict[str, Any]:
+def capture_pre_state(homes: list[tuple[str, Path]], *, backup: bool = True) -> dict[str, Any]:
     """Snapshot every served profile's config BEFORE the update mutates anything.
 
     Per profile: home path, root-key set, MCP fingerprint, and (``backup``) a
@@ -121,7 +121,7 @@ def capture_pre_state(homes: List[Tuple[str, Path]], *, backup: bool = True) -> 
     state, and config parity will flag the drift later."""
     from hermes_cli.config_backups import backup_config
 
-    state: Dict[str, Any] = {
+    state: dict[str, Any] = {
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "gateway_was_running": bool(_read_gateway_state()),
         "profiles": {},
@@ -147,7 +147,7 @@ def _pre_state_path(path: Optional[Path] = None) -> Path:
     return path or (get_hermes_home() / "logs" / "update_receipts" / PRE_STATE_FILENAME)
 
 
-def save_pre_state(state: Dict[str, Any]) -> Path:
+def save_pre_state(state: dict[str, Any]) -> Path:
     """Spec §5.1 — persist the captured pre-state to logs/update_receipts/."""
     path = _pre_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,14 +155,14 @@ def save_pre_state(state: Dict[str, Any]) -> Path:
     return path
 
 
-def load_pre_state(path: Optional[Path] = None) -> Dict[str, Any]:
+def load_pre_state(path: Optional[Path] = None) -> dict[str, Any]:
     """Spec §5.2 — load a persisted pre-state for verification."""
     return json.loads(_pre_state_path(path).read_text(encoding="utf-8"))
 
 
-def check_config_parity(pre_state: Dict[str, Any]) -> Tuple[bool, str]:
+def check_config_parity(pre_state: dict[str, Any]) -> tuple[bool, str]:
     """Spec §5.1 — verify every pre-state root key still exists on disk."""
-    missing_all: List[str] = []
+    missing_all: list[str] = []
     for name, snapshot in pre_state.get("profiles", {}).items():
         raw = _read_raw_config(Path(snapshot["home"]) / "config.yaml")
         missing = sorted(set(snapshot["root_keys"]) - set(raw) - {"_config_version"})
@@ -173,9 +173,9 @@ def check_config_parity(pre_state: Dict[str, Any]) -> Tuple[bool, str]:
     return True, f"{len(pre_state.get('profiles', {}))} profile(s) intact"
 
 
-def check_mcp_fingerprint_parity(pre_state: Dict[str, Any]) -> Tuple[bool, str]:
+def check_mcp_fingerprint_parity(pre_state: dict[str, Any]) -> tuple[bool, str]:
     """Spec §5.3 — verify each profile's MCP server shape (name/enabled/command/url) is unchanged."""
-    diffs: List[str] = []
+    diffs: list[str] = []
     for name, snapshot in pre_state.get("profiles", {}).items():
         raw = _read_raw_config(Path(snapshot["home"]) / "config.yaml")
         before = snapshot.get("mcp_fingerprint") or {}
@@ -191,11 +191,11 @@ def check_mcp_fingerprint_parity(pre_state: Dict[str, Any]) -> Tuple[bool, str]:
     return True, "MCP fingerprints match pre-state"
 
 
-def check_gateway_liveness(timeout: float = LIVENESS_TIMEOUT_SECONDS) -> Tuple[bool, str]:
+def check_gateway_liveness(timeout: float = LIVENESS_TIMEOUT_SECONDS) -> tuple[bool, str]:
     """Bounded polling of gateway_state.json + listener port. Never waits
     forever: the deadline is absolute (spec §5.3)."""
     deadline = time.monotonic() + timeout
-    last_state: Dict[str, Any] = {}
+    last_state: dict[str, Any] = {}
     while True:
         last_state = _read_gateway_state()
         if last_state.get("gateway_state") == "running":
@@ -212,10 +212,10 @@ def check_gateway_liveness(timeout: float = LIVENESS_TIMEOUT_SECONDS) -> Tuple[b
         time.sleep(LIVENESS_POLL_INTERVAL_SECONDS)
 
 
-def run_verification(pre_state: Dict[str, Any], *,
-                     timeout: float = LIVENESS_TIMEOUT_SECONDS) -> List[Dict[str, Any]]:
+def run_verification(pre_state: dict[str, Any], *,
+                     timeout: float = LIVENESS_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
     """Spec §5 — run all three verification checks and return per-check results."""
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     ok, detail = check_config_parity(pre_state)
     results.append({"name": "config_parity", "passed": ok, "detail": detail})
     ok, detail = check_mcp_fingerprint_parity(pre_state)
@@ -226,8 +226,8 @@ def run_verification(pre_state: Dict[str, Any], *,
     return results
 
 
-def rollback_update(pre_state: Dict[str, Any], *, checkout: Path, pre_sha: str,
-                    failed_check: str) -> Dict[str, Any]:
+def rollback_update(pre_state: dict[str, Any], *, checkout: Path, pre_sha: str,
+                    failed_check: str) -> dict[str, Any]:
     """git reset --hard to the pre-update SHA, restore config snapshots from
     their backup_config copies, restart the gateway best-effort.
 
@@ -244,8 +244,8 @@ def rollback_update(pre_state: Dict[str, Any], *, checkout: Path, pre_sha: str,
                                capture_output=True, text=True, check=False)
         reset_ok = reset.returncode == 0
         reset_detail = (reset.stderr or reset.stdout).strip()
-    restored: List[str] = []
-    restore_errors: List[str] = []
+    restored: list[str] = []
+    restore_errors: list[str] = []
     for name, snapshot in pre_state.get("profiles", {}).items():
         snapshot_file = snapshot.get("config_snapshot")
         if snapshot_file and Path(snapshot_file).exists():
@@ -271,7 +271,7 @@ def rollback_update(pre_state: Dict[str, Any], *, checkout: Path, pre_sha: str,
             "gateway_restart": gateway_restart, "failed_check": failed_check}
 
 
-def capture_and_record_pre_state(checkout: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+def capture_and_record_pre_state(checkout: Optional[Path] = None) -> Optional[dict[str, Any]]:
     """G3 §5.1 Pre hook for _cmd_update_impl. Best-effort: the guard rail must
     never break the update, so any failure returns None (verification is then
     skipped for this run and the receipt records the skip)."""
@@ -287,11 +287,11 @@ def capture_and_record_pre_state(checkout: Optional[Path] = None) -> Optional[Di
         return None
 
 
-def verify_or_rollback(pre_state: Dict[str, Any], *, checkout: Path,
+def verify_or_rollback(pre_state: dict[str, Any], *, checkout: Path,
                        timeout: float = LIVENESS_TIMEOUT_SECONDS) -> int:
     """G3 §5.1 Post-verify hook. Returns 0 when every check passes; otherwise
     rolls back, records the receipt section, prints the failed check, returns 1."""
-    from hermes_cli.update_receipt import record_verification
+    from hermes_cli.update_receipt_fork import record_verification
 
     checks = run_verification(pre_state, timeout=timeout)
     failed = next((check for check in checks if not check["passed"]), None)
@@ -321,7 +321,7 @@ def verify_or_rollback(pre_state: Dict[str, Any], *, checkout: Path,
     return 1 if failed is not None else 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """Spec §5 — CLI entry point: verify or roll back, exit 0 on success, 1 on failure."""
     parser = argparse.ArgumentParser(
         description="Verify the post-update state; roll back and exit 1 on failure.")
