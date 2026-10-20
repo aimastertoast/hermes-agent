@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import ast
 import subprocess
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 TARGET = "hermes_cli/update_cmd.py"
+GIT_TARGET = "hermes_cli/update_cmd_git.py"
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
@@ -36,6 +37,11 @@ MAX_ADDED = 70
 # is not in the updater's ``_UPDATE_CRITICAL_MODULES``). A deleted line is still forbidden for
 # the ordinary reason: it is a line upstream has to restore in the same hunk to collide.
 MAX_DELETED = 0
+
+# ``update_cmd_git.py`` carries the same rule: the fork's git-timeout work lives in
+# ``hermes_cli/update_git_timeout.py`` and only the installer call stays in the file.
+GIT_MAX_ADDED = 20
+GIT_MAX_DELETED = 0
 
 # Functions the fork moved OUT of the upstream-owned file. Re-defining one of them inline
 # puts fork code back into a merge-conflict magnet.
@@ -47,14 +53,17 @@ MOVED_OUT = (
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
+    # timeout: a treeless partial clone can make a plain diff hang on a lazy-fetch, and a
+    # hanging ratchet is worse than a failing one.
     return subprocess.run(
-        ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False
+        ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False,
+        timeout=60,
     )
 
 
-@lru_cache(maxsize=1)
-def _fork_delta() -> tuple[int, int] | None:
-    """``(added, deleted)`` for the fork's delta on the target file, or None without a ref."""
+@cache
+def _fork_delta(path: str = TARGET) -> tuple[int, int] | None:
+    """``(added, deleted)`` for the fork's delta on ``path``, or None without a ref."""
     ref = next(
         (r for r in ("origin/main",) if _git("rev-parse", "--verify", "--quiet", r).returncode == 0),
         None,
@@ -64,14 +73,14 @@ def _fork_delta() -> tuple[int, int] | None:
     base = _git("merge-base", "HEAD", ref).stdout.strip()
     if not base:
         return None
-    result = _git("diff", "--numstat", base, "--", TARGET)
+    result = _git("diff", "--numstat", base, "--", path)
     assert result.returncode == 0, result.stderr
     for line in result.stdout.splitlines():
         parts = line.split("\t")
         if len(parts) != 3:
             continue
-        added, deleted, path = parts
-        if path == TARGET and added.isdigit() and deleted.isdigit():
+        added, deleted, changed = parts
+        if changed == path and added.isdigit() and deleted.isdigit():
             return int(added), int(deleted)
     return None
 
@@ -92,6 +101,29 @@ def test_update_cmd_fork_delta_stays_within_budget() -> None:
         f"Every added line is a hunk upstream has to edit in the same place to collide. Move "
         f"the new code into a fork-owned module (hermes_cli/update_cmd_fork.py) and leave a "
         f"one-line call site behind."
+    )
+
+
+def test_update_cmd_git_fork_delta_stays_within_budget() -> None:
+    """The fork's delta on ``update_cmd_git.py`` must stay a pure insertion.
+
+    The git-timeout work lives in ``hermes_cli/update_git_timeout.py``; only the installer
+    call stays here. A rewritten ``_git_run`` is a line upstream has to edit in the same hunk
+    to collide.
+    """
+    delta = _fork_delta(GIT_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= GIT_MAX_DELETED, (
+        f"{GIT_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file (budget "
+        f"{GIT_MAX_DELETED}). Every deleted line is a line upstream has to restore in the same "
+        f"hunk to collide. Move the fork's change into a fork-owned module."
+    )
+    assert added <= GIT_MAX_ADDED, (
+        f"{GIT_TARGET}: the fork now adds {added} line(s) to upstream's file (budget "
+        f"{GIT_MAX_ADDED}). Move the new code into hermes_cli/update_git_timeout.py and leave "
+        f"the installer call behind."
     )
 
 
@@ -116,5 +148,6 @@ def test_fork_modules_exist() -> None:
     for path in (
         "hermes_cli/update_cmd_fork.py",
         "hermes_cli/update_transient_retry.py",
+        "hermes_cli/update_git_timeout.py",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"

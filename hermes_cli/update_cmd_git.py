@@ -27,9 +27,6 @@ _ORPHAN_RESCUE_REF_MAX_AGE_DAYS = 30
 _GIT_TEXT_KW = dict(capture_output=True, text=True, encoding="utf-8", errors="replace",
                    creationflags=windows_hide_flags())
 _BAR = "=" * 68
-# ``status``/``cherry``/``rev-list`` are local calls that normally finish in well under a
-# second; this is pure backstop so none of them can hold the update open indefinitely.
-_LOCAL_GIT_TIMEOUT_SECONDS = 120
 _UPSTREAM_ADD_CMD = "git remote add upstream https://github.com/NousResearch/hermes-agent.git"
 
 
@@ -38,46 +35,25 @@ def _git_ok(git_cmd, args, cwd, **kw) -> bool:
     return _git_stdout(git_cmd, args, cwd, **kw) is not None
 
 
-def _git_run(git_cmd, args, cwd=None, *, check=False, env=None, timeout=None):
+def _git_run(git_cmd, args, cwd=None, *, check=False, env=None):
     """Run ``git_cmd + args`` and return the CompletedProcess.
 
     The updater's git runner: capture all output and decode as UTF-8 regardless of the
     Windows ANSI code page (#52649). ``check=True`` raises on non-zero exit. The spawn
-    always hides its console window (#117781).
-
-    ``env`` replaces the child's environment and ``timeout`` bounds the call — both exist so
-    a git that reaches back to the promisor remote can't hold ``hermes update`` open forever.
-    A timeout comes back as exit 124, not as an exception, so callers keep one error path.
+    always hides its console window (#117781). ``env`` replaces the child's environment.
     """
     from hermes_cli.update_custody import run_git
 
     # THE custody policy (R2): stash push / reset --hard keep the update's lock fd, fetch does not.
-    kwargs = {}
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    try:
-        return run_git(
-            git_cmd, list(args),
-            cwd=cwd,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            check=check,
-            creationflags=windows_hide_flags(),
-            env=env,
-            **kwargs,
-        )
-    except subprocess.TimeoutExpired as exc:
-        # The child is already killed; report it as a failed run (exit 124) rather than an
-        # exception, so every caller's one stderr path also covers a git that never came back.
-        result = subprocess.CompletedProcess(
-            git_cmd + list(args), 124, stdout="",
-            stderr=f"git {args[0] if args else ''} timed out after {timeout}s",
-        )
-        if check:
-            raise subprocess.CalledProcessError(
-                124, result.args, output="", stderr=result.stderr
-            ) from exc
-        return result
+    return run_git(
+        git_cmd, list(args),
+        cwd=cwd,
+        capture_output=True,
+        text=True, encoding="utf-8", errors="replace",
+        check=check,
+        creationflags=windows_hide_flags(),
+        env=env,
+    )
 
 
 def _git_stdout(git_cmd, args, cwd, **kw) -> Optional[str]:
@@ -215,7 +191,7 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
             return False, "disabled"
     except Exception as exc:
         logger.debug("Could not read updates.auto_switch_parked_branch: %s", exc)
-    status = _git_run(git_cmd, ["status", "--porcelain"], cwd, timeout=_LOCAL_GIT_TIMEOUT_SECONDS)
+    status = _git_run(git_cmd, ["status", "--porcelain"], cwd)
     if status.returncode != 0:
         return False, "unverifiable"
     if status.stdout.strip():
@@ -224,10 +200,8 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
     # so a treeless (tree:0) partial clone answers from local objects. `git cherry`'s
     # patch-id walk needs upstream-side trees and lazy-fetches them in many promisor
     # batches; one failed batch failed the whole verification and skipped a clean
-    # checkout (#124767). Every call here is bounded by ``_LOCAL_GIT_TIMEOUT_SECONDS``:
-    # these are LOCAL git commands, so a hang is never a slow remote worth waiting on.
-    ahead = _git_run(git_cmd, ["rev-list", "--count", f"origin/{target_branch}..HEAD"], cwd,
-                     timeout=_LOCAL_GIT_TIMEOUT_SECONDS)
+    # checkout (#124767).
+    ahead = _git_run(git_cmd, ["rev-list", "--count", f"origin/{target_branch}..HEAD"], cwd)
     if ahead.returncode != 0 or not ahead.stdout.strip().isdigit():
         return False, "unverifiable"
     ahead_count = int(ahead.stdout.strip())
@@ -236,8 +210,7 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
     # Git before 2.44 ignores GIT_NO_LAZY_FETCH, so on a partial clone cherry still lazy-fetches
     # without bound (git 2.43 on WSL hung here, #124767). Its patch-ids need blobs a partial clone
     # keeps on the remote, so it rarely refines anything there: settle for the commit count.
-    promisor = _git_run(git_cmd, ["config", "--get-regexp", r"^(remote\..*\.promisor|extensions\.partialclone)$"], cwd,
-                        timeout=_LOCAL_GIT_TIMEOUT_SECONDS)
+    promisor = _git_run(git_cmd, ["config", "--get-regexp", r"^(remote\..*\.promisor|extensions\.partialclone)$"], cwd)
     if any(line.split()[-1].lower() != "false" for line in promisor.stdout.splitlines()):
         return True, f"unmerged:{ahead_count}"
     # The patch-id refinement must never fetch: on a tree:0 clone `git cherry` lazy-fetches
@@ -245,8 +218,7 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
     # 180 GiB over 7 h on Windows (#131444). With lazy fetch off a missing object fails the
     # command fast and the commit count below stands in.
     cherry = _git_run(git_cmd, ["cherry", f"origin/{target_branch}"], cwd,
-                      env={**noninteractive_git_env(), **NO_LAZY_FETCH_ENV},
-                      timeout=_LOCAL_GIT_TIMEOUT_SECONDS)
+                      env={**noninteractive_git_env(), **NO_LAZY_FETCH_ENV})
     if cherry.returncode != 0:
         # Patch-equivalence only refines the count for rebase/squash-merged branches;
         # a partial clone whose lazy fetch failed must not block a clean checkout,
@@ -754,3 +726,16 @@ def _normalize_managed_eol(git_cmd, repo_root, *, checkout_move=None):
             print(f"→ Normalized line-ending churn ({len(eol_only)} file(s))")
         run_git(git_cmd, ["config", "core.autocrlf", "false"], cwd=repo_root, capture_output=True, check=False,
                 creationflags=windows_hide_flags())
+
+
+# ---- FORK-OWNED: bound the local git calls ----------------------------------------------
+# ``status``/``cherry``/``rev-list --count``/``config --get-regexp`` are local commands that
+# can trigger a promisor lazy-fetch and hold the update open for hours (#131444). The bound
+# lives in a fork-owned module and is installed here, so upstream's ``_git_run`` stays
+# byte-identical: a rewritten line here is a merge-conflict magnet, and a conflict stops the
+# update outright.
+from hermes_cli.update_git_timeout import (
+    install_bounded_git_timeout as _install_bounded_git_timeout,
+)
+
+_install_bounded_git_timeout(globals())

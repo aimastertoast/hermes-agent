@@ -25,8 +25,11 @@ GITATTRIBUTES = REPO / ".gitattributes"
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
+    # timeout: a treeless partial clone can make a plain diff hang on a lazy-fetch, and a
+    # hanging policy test is worse than a failing one.
     return subprocess.run(
-        ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False
+        ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False,
+        timeout=60,
     )
 
 
