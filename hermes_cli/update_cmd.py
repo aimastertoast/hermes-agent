@@ -39,118 +39,38 @@ from hermes_cli.update_abort_recovery import (
     _abort_recovery_is_complete, _qualified_serve_skips, _recover_gateway_restart_after_abort,
     _serve_unit_recovery_available, _surviving_pre_update_serve_runtimes,
     _warn_stale_serve_runtimes)
-try:
-    from hermes_cli.update_cmd_selfheal import restore_patches  # noqa: F401  (PERMANENT FIX 2026-09-15)
-    from hermes_cli.update_cmd_selfheal import preflight_drift_check  # noqa: F401  (HARDENING 2026-09-19: pre-update upstream drift check)
-except ImportError:  # P5 import guard (2026-09-15): a missing restorer must not brick CLI update paths.
-    class _SelfHealNoopResult:
-        """Duck-type of a successful no-op restore result (P5 fallback)."""
-        patches_applied = ()
-        patches_drifted = ()
-        patches_with_marker_fail = ()
-        fatal_error = None
-        bundle_rebuild_required = False
-
-        def __getattr__(self, name):
-            return ()
-
-    def restore_patches(project_root=None, **_kw):  # noqa: F811
-        print(
-            "WARNING: hermes_cli.update_cmd_selfheal not importable — patch self-heal skipped this run. "
-            "Restore from Workspace/agents/hermes-patches/selfheal/ (the post-merge hook does this automatically).",
-            file=sys.stderr,
-        )
-        return _SelfHealNoopResult()
-
-    class _PreflightNoopReport:
-        """Duck-type for the pre-update drift check (HARDENING 2026-09-19 fallback).
-
-        Reports empty (no drift) so a missing selfheal module does not block the
-        update path. The post-merge hook still catches drift at restore time.
-        """
-        drifted = ()
-        skipped_no_meta = ()
-        skipped_no_upstream = ()
-        fatal_error = None
-
-        def __getattr__(self, name):
-            return ()
-
-        @property
-        def is_blocking(self):
-            return False
-
-    def preflight_drift_check(project_root=None, **_kw):  # noqa: F811
-        print(
-            "WARNING: hermes_cli.update_cmd_selfheal not importable — pre-update drift check skipped this run. "
-            "Drift will be caught by the post-merge hook instead (slower, post-merge).",
-            file=sys.stderr,
-        )
-        return _PreflightNoopReport()
-try:
-    from hermes_cli.update_cmd_windows import (  # noqa: F401
-        _HOLDER_VALUE_FLAGS_FALLBACK,
-        _cold_start_windows_gateway_after_update, _desktop_owns_gateway_lifecycle,
-        _detect_venv_python_processes,
-        _handoff_reapable_backend_pids, _hermes_holder_subcommand, _holder_value_flags,
-        _holder_value_flags_cache, _ledger_manual_serve_holders, _ledger_reapable_backend_pids,
-        _leftover_pausable_gateway_pids, _looks_like_desktop_control_plane,
-        _orphaned_desktop_backend_pids, _pause_windows_gateways_for_update,
-        _refresh_bootstrap_cache_scripts, _refresh_windows_gateway_launchers,
-        _refuse_gateway_ancestor_tree_kill, _relaunch_stopped_serves,
-        _restore_windows_gateway_service, _resume_windows_gateways_after_update,
-        _resume_windows_gateways_and_merge_outcome, _self_and_non_gateway_ancestor_pids,
-        _serve_relaunch_commands, _start_windows_gateway_service, _stop_process_trees,
-        _stop_windows_gateway_service, _venv_launcher_ancestors,
-        _wait_for_windows_update_gateway_exit, _write_update_planned_stop_marker)
-except ImportError:  # P5 extended guard (2026-09-16): patch drift must not brick update_cmd import.
-    # When the jobobject patch hasn't restored the windows module's symbols yet (mid-drift),
-    # the real import raises ImportError on a single missing name. The selfheal guard above
-    # only catches a missing restorer; this guard catches a missing windows module. Same shape:
-    # loud WARNING on stderr, every imported symbol gets a no-op fallback so the rest of
-    # update_cmd.py (and re-exporters like hermes_cli.main) keep resolving.
-    from types import SimpleNamespace as _SimpleNamespace
-    print(
-        "WARNING: hermes_cli.update_cmd_windows symbols not importable \u2014 Windows gateway-lifecycle "
-        "calls will be skipped this run. Expected after a patch drift; the post-merge hook restores them.",
-        file=sys.stderr,
-    )
-    _stub = lambda *a, **kw: None  # noqa: E731
-    _predicate = lambda *a, **kw: False  # noqa: E731
-    _list_stub = lambda *a, **kw: []  # noqa: E731
-    _empty_str = lambda *a, **kw: ""  # noqa: E731
-    _HOLDER_VALUE_FLAGS_FALLBACK = ()
-    _cold_start_windows_gateway_after_update = _predicate
-    _desktop_owns_gateway_lifecycle = _predicate
-    _detect_venv_python_processes = _list_stub
-    _handoff_reapable_backend_pids = _list_stub
-    _hermes_holder_subcommand = _stub
-    _holder_value_flags = _stub
-    _holder_value_flags_cache = _SimpleNamespace(
-        get=lambda *a, **kw: None, set=lambda *a, **kw: None, clear=lambda: None)
-    _ledger_manual_serve_holders = _stub
-    _ledger_reapable_backend_pids = _stub
-    _leftover_pausable_gateway_pids = _list_stub
-    _looks_like_desktop_control_plane = _predicate
-    _orphaned_desktop_backend_pids = _list_stub
-    _pause_windows_gateways_for_update = _stub  # callers branch on truthiness (if _windows_gateway_resume:)
-    _refresh_bootstrap_cache_scripts = _stub
-    _refresh_windows_gateway_launchers = _stub
-    _refuse_gateway_ancestor_tree_kill = _stub
-    _relaunch_stopped_serves = _stub
-    _restore_windows_gateway_service = _stub
-    _resume_windows_gateways_after_update = _stub
-    _resume_windows_gateways_and_merge_outcome = _stub
-    _self_and_non_gateway_ancestor_pids = _list_stub
-    _serve_relaunch_commands = _list_stub
-    _start_windows_gateway_service = _stub
-    _stop_process_trees = _stub
-    _stop_windows_gateway_service = _stub
-    _venv_launcher_ancestors = _list_stub
-    _wait_for_windows_update_gateway_exit = _stub
-    _write_update_planned_stop_marker = _stub
-
-from hermes_cli.update_cmd_fleet import (  # noqa: F401
+# ---- FORK-OWNED IMPORTS -------------------------------------------------------------
+# The fork's own code lives in fork-owned modules (hermes_cli/update_cmd_fork.py,
+# hermes_cli/update_transient_retry.py). This file is upstream-owned and is merged on
+# every update, so every line the fork adds here is a merge-conflict magnet -- a
+# conflict stops the update outright. Keep this block small.
+#
+# It must come BEFORE the update_cmd_windows import below: importing it first lets the
+# fork-owned module publish a stub for hermes_cli.update_cmd_windows when the real one
+# cannot be imported (see hermes_cli/update_cmd_fork.py), so upstream's own import
+# statement still resolves.
+from hermes_cli.update_cmd_fork import (
+    _set_update_applied_new_code, check_pre_update_drift, install_transient_retry,
+    preflight_drift_check, resolve_local_only_branch, restore_patches,
+    cmd_update_via_orchestrator as _cmd_update_via_orchestrator,
+    orchestrator_outcome_to_exit_code as _orchestrator_outcome_to_exit_code)
+from hermes_cli.update_transient_retry import (
+    is_transient_fetch_failure, with_transient_retry as _with_transient_retry)
+# ---- END FORK-OWNED IMPORTS ---------------------------------------------------------
+from hermes_cli.update_cmd_windows import (
+    _HOLDER_VALUE_FLAGS_FALLBACK,
+    _cold_start_windows_gateway_after_update, _desktop_owns_gateway_lifecycle,
+    _detect_venv_python_processes, _hermes_holder_subcommand, _holder_value_flags,
+    _holder_value_flags_cache, _looks_like_desktop_control_plane,
+    _pause_windows_gateways_for_update,
+    _refresh_bootstrap_cache_scripts, _refresh_windows_gateway_launchers,
+    _refuse_gateway_ancestor_tree_kill,
+    _restore_windows_gateway_service, _resume_windows_gateways_after_update,
+    _resume_windows_gateways_and_merge_outcome, _self_and_non_gateway_ancestor_pids,
+    _start_windows_gateway_service,
+    _stop_windows_gateway_service, _venv_launcher_ancestors,
+    _wait_for_windows_update_gateway_exit, _write_update_planned_stop_marker)
+from hermes_cli.update_cmd_fleet import (
     _FLEET_RESTART_PENDING_NAME, _FRESH_RESTART_SUPERVISORS, _GatewayRestartOutcome,
     _clear_fleet_restart_pending_marker,
     _current_checkout_sha, _drain_or_signal_gateway_for_update, _fleet_probe_expected_runtimes,
@@ -167,16 +87,8 @@ from hermes_cli.update_cmd_fleet import (  # noqa: F401
     _warn_incomplete_gateway_fleet_restart, _warn_pending_fleet_restart,
     _warn_pending_fleet_restart_on_startup, _write_fleet_restart_pending_marker,
     _write_gateway_update_exit_code)
-# gateway-jobobject-fix owns this import (kept disjoint from the P5-guarded block above so the
-# two patches never claim overlapping regions; any apply order works).
-try:
-    from hermes_cli.update_cmd_windows import _set_update_applied_new_code  # noqa: F401
-except ImportError:  # symbol arrives with the gateway-jobobject patch; until then, no-op.
-    def _set_update_applied_new_code(value):
-        pass
-
-from hermes_cli.update_cmd_fleet_verify import _verify_fleet_after_update  # noqa: F401
-from hermes_cli.update_cmd_zip import (  # noqa: F401
+from hermes_cli.update_cmd_fleet_verify import _verify_fleet_after_update
+from hermes_cli.update_cmd_zip import (
     _ZIP_PRESERVED_TOP_LEVEL, _ZIP_STAGING_ARTIFACT_SUFFIXES, _abort_zip_update_if_dirty_tree,
     _atomic_replace_dir, _commit_staged_replacements, _discard_staged,
     _is_zip_preserved_entry_status_line, _is_zip_staging_artifact_status_line, _stage_replacement,
@@ -207,10 +119,9 @@ from hermes_cli.update_cmd_git import (
     _has_upstream_remote, _is_fork, _locate_real_git, _mark_skip_upstream_prompt,
     _normalize_managed_eol, _park_detached_head, _portable_git_candidates, _print_fetch_failure,
     _print_parked_branch_kept_notice, _print_parked_branch_skip_warning,
-    _prune_orphan_rescue_refs, _push_synced_fork, _should_skip_upstream_prompt,
-    _sync_fork_with_upstream, _sync_with_upstream_if_needed, _with_transient_retry,
-    UpstreamTargetBroken, is_transient_fetch_failure)
-from hermes_cli.update_cmd_maint import (  # noqa: F401
+    _prune_orphan_rescue_refs, _push_synced_fork, _should_skip_upstream_prompt, _sync_fork_with_upstream,
+    _sync_with_upstream_if_needed, UpstreamTargetBroken)
+from hermes_cli.update_cmd_maint import (
     _PRE_UPDATE_SNAPSHOT_KEEP, _PRE_UPDATE_SNAPSHOT_MAX_FILE_SIZE,
     _checkout_version, _ensure_acp_launcher, _ensure_fhs_path_guard, _finish_dashboard_update_cleanup,
     _format_time_ago, _post_update_sqlite_runtime_status, _print_bundled_skills_sync_report,
@@ -370,41 +281,39 @@ def _git_run(git_cmd, args, cwd=None, *, check=False, network=False):
     """Run git capturing utf-8 text (default cwd: checkout); ``network=True`` disables the
     terminal prompt so an HTTP 401 fails fast instead of hanging, and bounds the wait.
 
-    A network command that fails transiently (rate limit, outage, dropped socket, or this
-    module's own 300s bound) is retried twice with the wait printed first: one blip must not
-    abort the whole update, and a retry must never read as a hang. Local commands never wait.
-
     Every spawn carries ``windows_hide_flags()``: the updater's git children run under the
     console-less desktop backend, and a bare spawn flashes a console window each (#117781)."""
     from hermes_cli._subprocess_compat import windows_hide_flags
     # ``_no_prompt_git_kwargs()`` already carries the hide flags for network
     # calls, so layer them instead of passing the keyword twice.
-    def once():
-        spawn_kwargs = {"timeout": NETWORK_GIT_TIMEOUT_SECONDS, **_no_prompt_git_kwargs()} if network else {}
-        spawn_kwargs.setdefault("creationflags", windows_hide_flags())
-        from hermes_cli.update_custody import run_git
+    spawn_kwargs = {"timeout": NETWORK_GIT_TIMEOUT_SECONDS, **_no_prompt_git_kwargs()} if network else {}
+    spawn_kwargs.setdefault("creationflags", windows_hide_flags())
+    from hermes_cli.update_custody import run_git
 
-        # The one custody policy (R2): local mutators keep the update's checkout lock fd, network
-        # git runs without it and dies with us, no git forks a detached gc/maintenance child.
-        # ``check`` is applied by the caller below so a transient failure stays a CompletedProcess
-        # the retry wrapper can inspect instead of an exception it would have to classify.
-        try:
-            return run_git(
-                git_cmd, args, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
-                text=True, encoding="utf-8", errors="replace", check=False,
-                **spawn_kwargs)
-        except subprocess.TimeoutExpired as exc:
-            # subprocess.run already killed the child; the checkout stays consistent because
-            # fetch writes to tmp_pack_* and only renames on success. Report as a failed run
-            # so every caller's existing stderr path prints one clear line.
-            return subprocess.CompletedProcess(
-                exc.cmd, 124, stdout="",
-                stderr=f"git {args[0]} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s (a stalled remote, or a transfer too large for the limit)")
+    # The one custody policy (R2): local mutators keep the update's checkout lock fd, network
+    # git runs without it and dies with us, no git forks a detached gc/maintenance child.
+    try:
+        return run_git(
+            git_cmd, args, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", check=check,
+            **spawn_kwargs)
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run already killed the child; the checkout stays consistent because
+        # fetch writes to tmp_pack_* and only renames on success. Report as a failed run
+        # so every caller's existing stderr path prints one clear line.
+        result = subprocess.CompletedProcess(
+            exc.cmd, 124, stdout="",
+            stderr=f"git {args[0]} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s (a stalled remote, or a transfer too large for the limit)")
+        if check:
+            raise subprocess.CalledProcessError(124, exc.cmd, output="", stderr=result.stderr) from exc
+        return result
 
-    result = _with_transient_retry(once, label=f"git {args[0]}") if network else once()
-    if check and result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
-    return result
+
+# FORK: wrap the network git runner with the bounded transient-failure retry
+# (fork-owned; see hermes_cli/update_transient_retry.py). Installed here so
+# upstream's _git_run body stays byte-identical.
+install_transient_retry(globals())
+
 
 def _heal_stale_shallow_checkout(repo_root: Path, branch: str) -> None:
     """Unshallow a shallow checkout before the bounded fetch (#123254). Non-fatal: on failure the
@@ -744,27 +653,6 @@ def _source_update_channel(args=None, *, channel=None, branch_explicit=False) ->
     return resolve_update_channel(config, _m().PROJECT_ROOT)
 
 
-def _remote_has_branch(root: Path, branch: str) -> bool:
-    """True iff ``origin`` actually has ``branch``.
-
-    A fork install sits on a branch that exists on no remote, and the desktop
-    hands that branch to the updater as ``--branch`` (it reads it from the
-    install stamp). Fetching it dies with "couldn't find remote ref", so ask
-    the remote before trusting the flag. ``ls-remote --exit-code`` exits 2 when
-    no ref matches; any other non-zero (offline, auth) is also "not proven" —
-    the caller's fallback is the same either way.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "ls-remote", "--exit-code", "--heads", "origin", branch],
-            capture_output=True, text=True, check=False,
-            timeout=30, **_no_prompt_git_kwargs(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0
-
-
 def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False, channel=None):
     """Implement ``hermes update --check``: fetch and report without installing.
 
@@ -860,8 +748,7 @@ def _print_update_check_result(behind: int | None, compare_branch: str) -> None:
     print(f"  Run '{recommended_update_command()}' to install.")
 
 
-def _source_completion_request(opts, plan, snapshot_id, windows_resume, desktop, gateway_mode,
-                               verify_pre_state: dict | None = None) -> dict:
+def _source_completion_request(opts, plan, snapshot_id, windows_resume, desktop, gateway_mode) -> dict:
     """Freeze data before mutation; no pre-swap module objects cross the seam."""
     from copy import deepcopy
     current = _completion_receipt._current.get()
@@ -877,13 +764,6 @@ def _source_completion_request(opts, plan, snapshot_id, windows_resume, desktop,
         "sibling_snapshots": deepcopy(_completion_config._LAST_SIBLING_SNAPSHOTS),
         "plan": plan.to_dict() if plan is not None else None,
         "receipt": deepcopy(current.data), "windows_resume": windows_resume,
-        # G3 guard rail (spec §5.1): the post-verify has to run inside the completion
-        # child — after the gateway relaunch and before that child finalizes the
-        # receipt. The parent pops its own receipt the moment this child returns one
-        # (_complete_source_update), so a parent-side record_verification no-ops and
-        # the verification section never reaches the file. JSON-saved pre-state, so
-        # it survives the request.json seam.
-        "verify_pre_state": verify_pre_state,
     }
 
 
@@ -1841,6 +1721,7 @@ def _handle_update_called_process_error(
             args, had_desktop_app_before_update=had_desktop_app_before_update,
             target_sha=target_sha, completion_request=completion_request,
             **({"target_repository": target_repository} if target_repository else {}))
+
     else:
         if _called_process_error_is_python_dep_install(e):
             print(f"✗ {stage} (the code update itself succeeded).")
@@ -1873,19 +1754,8 @@ def _finalize_receipt(status: str, debug_message: str) -> None:
 def _finish_already_up_to_date(
     git_cmd, branch: str, current_branch: str, _plan, *, gw_input_fn, completion_request: dict,
     _windows_gateway_resume=None) -> None:
-    """"Already up to date" path: restore stash/branch, then hand the run to the completion
-    child, which owns the fleet catch-up, the Desktop rebuild and the G3 verify.
-    ``sys.exit(1)`` when the repair is incomplete (after gateway exit code + partial receipt).
-
-    The fleet obligations a no-op update still owes are discharged inside
-    ``update_completion._complete_selected`` (via ``_pending_fleet_restart_needed`` and
-    ``_restart_gateway_fleet_after_update``), NOT here — inlining that tail through helpers
-    that no longer exist in the split update package made every no-op update die with a
-    ``NameError``. One completion path, one owner.
-    """
-    # A parked branch the update switched off stays on the target: re-parking on the stale branch
-    # recreates the incident. No other checkout left current_branch (in-place and release updates
-    # never switch), so there is nothing to switch back to.
+    """"Already up to date" path: restore stash, repair the checkout, catch up the fleet.
+    ``sys.exit(1)`` when the repair is incomplete (after gateway exit code + partial receipt)."""
     # A parked branch the update switched off stays on the target: re-parking on the stale branch
     # recreates the incident. No other checkout left current_branch (in-place and release updates
     # never switch), so there is nothing to switch back to.
@@ -1914,15 +1784,9 @@ def _finish_already_up_to_date(
 
 def _apply_pulled_update(
     git_cmd, branch, movement_baseline, _plan, *, _windows_gateway_resume, completion_request: dict) -> None:
-    """Post-pull phase: verify HEAD, then hand the rest of the run to the completion child.
+    """Post-pull phase: verify HEAD, sync Python/Node/web/Desktop, maintenance, fleet restart.
 
-    ``movement_baseline`` is what ``_pull_updates`` returned: the SHA HEAD had to move off.
-
-    ``_complete_source_update`` spawns a fresh interpreter on the pulled tree
-    (``update_completion.run_completion``), so the dependency sync, bytecode sweep, Desktop
-    rebuild, fleet restart and G3 verify all run on the NEW code. This function never returns
-    on the success path: the child owns the receipt and this process only relays its exit code.
-    """
+    ``movement_baseline`` is what ``_pull_updates`` returned: the SHA HEAD had to move off."""
     post_pull_sha = _verify_head_after_pull(
         git_cmd, branch, movement_baseline, in_place_update=_plan.in_place_update,
         _windows_gateway_resume=_windows_gateway_resume)
@@ -2000,9 +1864,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
     _record_pre_update_backup_outcome(args, pre_update_snapshot_id)
     _record_snapshot_stage(args, pre_update_snapshot_id)
 
-    # G3 guard rail (spec §5.1 Pre): per-profile config snapshots + root-key/MCP
-    # fingerprint pre-state, before any git/file mutation. Best-effort — a
-    # capture failure disables verification for this run instead of failing it.
+    # G3 guard rail: capture the per-profile config + MCP fingerprint pre-state before
+    # any mutation. Best-effort -- a capture failure disables verification for this run.
     from hermes_cli.update_verification import capture_and_record_pre_state
     _verify_pre_state = capture_and_record_pre_state()
     _record_update_step("pre_state_capture", _verify_pre_state is not None,
@@ -2024,22 +1887,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
     completion_request = _source_completion_request(
         opts, _pre_update_plan, pre_update_snapshot_id, _windows_gateway_resume,
-        had_desktop_app_before_update, gateway_mode, verify_pre_state=_verify_pre_state)
+        had_desktop_app_before_update, gateway_mode)
+    completion_request["verify_pre_state"] = _verify_pre_state
     branch = _m()._resolve_update_branch(args)
+    branch = resolve_local_only_branch(args, branch, project_root=_m().PROJECT_ROOT)
     completion_request["branch"] = branch
-    # A fork install's branch is local-only, and the desktop passes it as
-    # --branch; fetching it fails with "couldn't find remote ref". What the user
-    # wants is the channel's own branch merged INTO the local one. Re-pin the
-    # subscription to that branch instead of dropping it: args.branch=None would
-    # let the channel's release pin land DETACHED at its exact commit,
-    # abandoning the maintained branch. With origin/<branch> as the target the
-    # parked-branch guard stays in charge and merges in place under
-    # updates.parked_branch_strategy=update_in_place.
-    if getattr(args, "branch", None) and not _remote_has_branch(_m().PROJECT_ROOT, branch):
-        selected_channel = _source_update_channel(args)
-        print(f"  (branch {branch} is local-only; updating from the {selected_channel} channel instead)")
-        args.branch = branch = "main"
-        completion_request["branch"] = branch
     target_ref, release_sha, target_is_head, target_repository = _check.select_apply_target(
         args, branch, completion_request, git_cmd=None if use_zip_update else git_cmd,
         stop=lambda: _m()._resume_windows_gateways_after_update(_windows_gateway_resume))
@@ -2102,47 +1954,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _record_stop("git_timeout" if fetch_result.returncode == 124 else "disk_full"
                          if "No space left on device" in (fetch_result.stderr or "") else "fetch_failed")
             sys.exit(1)
-        # Fetch succeeded: the checkout is about to move (or the update is completing normally),
-        # so the atexit gateway resume must run its full post-update handling. Left False on a
-        # failed fetch => abort-safe restore only (gateways keep running existing code).
-        # Direct call: _m() shim (hermes_cli.main) does not re-export this name.
+
+        # FORK: the fetch succeeded, so the atexit gateway resume must run its full
+        # post-update handling; and the local patch bundle must still apply on top of
+        # the freshly fetched upstream (both fork-owned; see hermes_cli/update_cmd_fork.py).
         _set_update_applied_new_code(True)
-
-        # HARDENING 2026-09-19 (Task 1): pre-update upstream drift check.
-        # Run AFTER the fetch (so origin/main is fresh) but BEFORE the merge
-        # at _prepare_checkout_for_update (so abort-on-drift is mutation-free).
-        # For each active patch, materialize origin/main's version of the
-        # target file into a temp mirror, then git apply --check against it.
-        # Any failure => upstream rewrote the file in a way our local patch
-        # can no longer accommodate; abort with a per-patch report so the
-        # patch can be regenerated against the new upstream before the user
-        # re-runs update. Nothing is mutated on abort.
-        _preflight = preflight_drift_check(project_root=_m().PROJECT_ROOT, upstream_ref=f"origin/{branch}")
-        if _preflight.drifted:
-            print()
-            print("  X PRE-UPDATE DRIFT DETECTED — update aborted, nothing mutated:")
-            print("    The upstream rewrite of one or more files would strip a local patch.")
-            print("    Regenerate the patch(es) against the new upstream, then re-run update.")
-            print()
-            for _name, _relpath, _reason in _preflight.drifted:
-                print(f"      DRIFT  {_name}")
-                print(f"             file: {_relpath}")
-                print(f"             reason: {_reason}")
-                print()
-            for _name in _preflight.skipped_no_meta:
-                print(f"      SKIP   {_name} (no target_relpath in .meta.json)")
-            if _preflight.skipped_no_upstream:
-                for _name, _relpath in _preflight.skipped_no_upstream:
-                    print(f"      SKIP   {_name} (target {_relpath} not on origin/{branch} — local addition)")
-            _finalize_receipt("partial", f"Pre-update drift check refused: {len(_preflight.drifted)} patch(es) drifted against origin/{branch}")
-            sys.exit(1)
-        if _preflight.fatal_error:
-            print(f"  X PRE-UPDATE DRIFT CHECK FATAL: {_preflight.fatal_error} — aborting (cannot guarantee safe merge).")
-            _finalize_receipt("partial", f"Pre-update drift check fatal: {_preflight.fatal_error}")
-            sys.exit(1)
-        if _preflight.skipped_no_meta or _preflight.skipped_no_upstream:
-            print(f"  (preflight: {len(_preflight.skipped_no_meta)} patch(es) skipped (no meta), {len(_preflight.skipped_no_upstream)} skipped (local-only target))")
-
+        check_pre_update_drift(project_root=_m().PROJECT_ROOT, upstream_ref=f"origin/{branch}")
 
         current_branch = _current_branch_name(git_cmd, check=True)
         _commit.record_run_start(git_cmd, _m().PROJECT_ROOT)
@@ -2187,93 +2004,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 e, args, gateway_mode, had_desktop_app_before_update, target_sha=release_sha,
                 target_repository=target_repository, completion_request=completion_request)
         finally:
-            if _windows_gateway_resume and _windows_gateway_resume.get("resume_needed"):
-                _resume_paused_gateways_at_exit(_windows_gateway_resume, completion_request)
-
-
-def _orchestrator_outcome_to_exit_code(outcome) -> int:
-    """Translate an ``UpdateOutcome`` into a CLI exit code.
-
-    The orchestrator's ``exit_code`` field defaults to ``0`` for every terminal
-    branch that does not explicitly override it (success, aborted, conflict,
-    failed, partial, catastrophic, no-op). Only the ``receipt-write-failed``
-    success branch sets it to ``1``. We rely on ``outcome.exit_code`` when it
-    is set, and otherwise fall back to a deterministic mapping so callers see
-    a non-zero exit for any non-success outcome — matches the legacy path's
-    contract and the test cases in
-    ``hermes_cli/tests/update/test_update_cmd_wrapper.py``.
-    """
-    if outcome.exit_code:
-        return outcome.exit_code
-    if outcome.outcome in ("success", "no-op"):
-        return 0
-    return 1
-
-
-def _cmd_update_via_orchestrator(args, gateway_mode: bool) -> int:
-    """Run the new ``run_update`` orchestrator as the update entry point.
-
-    Thin wrapper around ``hermes_cli.update_orchestrator.run_update``. Wired
-    in ``cmd_update`` behind the ``--use-orchestrator`` flag so the legacy
-    ``_cmd_update_impl`` path stays the default. Returns the CLI exit code
-    directly so the click handler can ``sys.exit(code)`` it.
-
-    ``gateway_mode`` is accepted for parity with ``_cmd_update_impl`` and is
-    currently unused: the orchestrator handles gateway pause/resume itself
-    via the ``gateway`` kwarg, which is not yet exposed on the CLI surface
-    (no gateway currently runs while the orchestrator is the entry point).
-    """
-    from hermes_cli.update_orchestrator import run_update as _run_update
-
-    repo = _m().PROJECT_ROOT
-    home = Path(get_hermes_home())
-
-    print("☤ Updating Hermes Agent (orchestrator)...")
-
-    outcome = _run_update(
-        repo=repo,
-        home=home,
-        force=getattr(args, "force", False),
-        auto_apply_safe=getattr(args, "auto_apply_safe", False),
-    )
-
-    if outcome.outcome == "conflict":
-        # Conflicts are left in MERGE_HEAD by the orchestrator (per spec). The
-        # user resolves them out-of-band and re-runs update; we surface the
-        # receipt id and the conflict markers so the operator knows the work
-        # that is sitting on disk.
-        print(f"✗ Update aborted: merge conflicts (receipt {outcome.receipt_id or '<none>'})")
-        for step in outcome.steps:
-            if step.get("name") == "merge" and not step.get("ok", True):
-                detail = step.get("detail") or []
-                if isinstance(detail, (list, tuple)):
-                    for path in detail:
-                        print(f"    CONFLICT  {path}")
-                elif detail:
-                    print(f"    CONFLICT  {detail}")
-        print(f"    Resolve with: cd {repo} && git merge --abort   # or resolve manually, then re-run")
-    elif outcome.outcome == "aborted":
-        print(f"✗ Update aborted: {outcome.error or 'unknown'}")
-    elif outcome.outcome == "failed":
-        print(f"✗ Update failed: {outcome.error or 'unknown'}"
-              + (" (rolled back from snapshot)" if outcome.rolled_back else ""))
-    elif outcome.outcome == "partial":
-        print(f"✗ Update partial: {outcome.error or 'gateway-swap-failed'}")
-    elif outcome.outcome == "catastrophic":
-        print(f"✗ Update catastrophic: {outcome.error or 'unknown'} (snapshot restore failed)")
-    elif outcome.outcome == "no-op":
-        print(f"→ Update skipped: {outcome.error or 'not a git install'}")
-    # success: orchestrator already wrote a receipt; nothing else to print.
-
-    return _orchestrator_outcome_to_exit_code(outcome)
+            _resume_paused_gateways_at_exit(_windows_gateway_resume, completion_request)
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
 # Names external plugins imported from this module before the Sep 2026 decomposition.
 # Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
 # The whole block is removed by reverting the commit that added it.
-from typing import Optional  # noqa: F401,E402
-from datetime import datetime  # noqa: F401,E402
-import hashlib  # noqa: F401,E402
-import json  # noqa: F401,E402
+from typing import Optional
+from datetime import datetime
+import hashlib
+import json
 # ---- END PLUGIN-COMPAT ----

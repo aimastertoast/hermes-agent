@@ -76,6 +76,7 @@ docker/entrypoint.sh text eol=lf
 /gateway/status.py merge=union
 /hermes_cli/main.py merge=union
 /hermes_cli/subcommands/update.py merge=union
+/hermes_cli/update_cmd.py merge=union
 /hermes_cli/update_completion.py merge=union
 /hermes_cli/update_contract.py merge=union
 /scripts/desktop-update/windows.ps1 merge=union

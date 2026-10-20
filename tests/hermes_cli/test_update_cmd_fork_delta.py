@@ -1,0 +1,120 @@
+"""The fork's delta on the upstream-owned ``update_cmd.py`` must stay tiny — FORK-OWNED.
+
+``hermes update`` merges ``origin/main`` into the fork's branch and ABORTS on any conflict
+(exit 1 — the Desktop's "Update failed (exit 1)" banner). A conflict is per-HUNK, so every
+line the fork keeps in an upstream-owned file is a line upstream has to edit in the same
+place to stop the update. The fork's code therefore lives in fork-owned modules
+(``hermes_cli/update_cmd_fork.py``, ``hermes_cli/update_transient_retry.py``) and only
+thin call sites stay in ``hermes_cli/update_cmd.py``.
+
+Measured against the merge base of HEAD and ``origin/main`` — the base the next merge will
+actually use. Measuring against ``origin/main`` itself would count upstream's own newer
+commits as if the fork had removed those lines. The working tree is measured, not just
+HEAD, so the ratchet also covers work in progress.
+
+This test is the ratchet: it fails when the delta grows back, and says where the new code
+belongs.
+"""
+
+from __future__ import annotations
+
+import ast
+import subprocess
+from functools import lru_cache
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+TARGET = "hermes_cli/update_cmd.py"
+
+# The budget. Every line here is a line upstream has to collide with.
+MAX_ADDED = 70
+# update_cmd.py is listed `merge=union` in .gitattributes, and the union driver is only
+# correct while the fork's delta is a PURE INSERTION: a deleted line would end up
+# duplicated next to upstream's version of it.
+MAX_DELETED = 0
+
+# Functions the fork moved OUT of the upstream-owned file. Re-defining one of them inline
+# puts fork code back into a merge-conflict magnet.
+MOVED_OUT = (
+    "_cmd_update_via_orchestrator",
+    "_orchestrator_outcome_to_exit_code",
+    "_remote_has_branch",
+)
+
+
+def _git(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False
+    )
+
+
+@lru_cache(maxsize=1)
+def _fork_delta() -> tuple[int, int] | None:
+    """``(added, deleted)`` for the fork's delta on the target file, or None without a ref."""
+    ref = next(
+        (r for r in ("origin/main",) if _git("rev-parse", "--verify", "--quiet", r).returncode == 0),
+        None,
+    )
+    if ref is None:
+        return None
+    base = _git("merge-base", "HEAD", ref).stdout.strip()
+    if not base:
+        return None
+    result = _git("diff", "--numstat", base, "--", TARGET)
+    assert result.returncode == 0, result.stderr
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        added, deleted, path = parts
+        if path == TARGET and added.isdigit() and deleted.isdigit():
+            return int(added), int(deleted)
+    return None
+
+
+def test_update_cmd_fork_delta_stays_within_budget() -> None:
+    """The fork's delta on ``update_cmd.py`` must not grow back into a conflict magnet."""
+    delta = _fork_delta()
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= MAX_DELETED, (
+        f"{TARGET}: the fork now DELETES {deleted} line(s) of upstream's file (budget "
+        f"{MAX_DELETED}). Every deleted line is a line upstream has to restore in the same "
+        f"hunk to collide, and it breaks the merge=union policy for this file (union would "
+        f"keep upstream's line and the fork's block side by side). Move the fork's change "
+        f"into a fork-owned module."
+    )
+    assert added <= MAX_ADDED, (
+        f"{TARGET}: the fork now adds {added} line(s) to upstream's file (budget {MAX_ADDED}). "
+        f"Every added line is a hunk upstream has to edit in the same place to collide. Move "
+        f"the new code into a fork-owned module (hermes_cli/update_cmd_fork.py) and leave a "
+        f"one-line call site behind."
+    )
+
+
+def test_moved_fork_functions_are_not_redefined_in_update_cmd() -> None:
+    """The fork's moved-out functions must stay imported, not re-defined inline."""
+    tree = ast.parse((REPO / TARGET).read_text(encoding="utf-8"))
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for name in MOVED_OUT:
+        assert name not in defined, (
+            f"{name} is defined inside {TARGET} again. It belongs in "
+            f"hermes_cli/update_cmd_fork.py: a definition in an upstream-owned file is a "
+            f"merge-conflict magnet."
+        )
+
+
+def test_fork_modules_exist() -> None:
+    """The fork-owned modules the call sites point at must be present."""
+    for path in (
+        "hermes_cli/update_cmd_fork.py",
+        "hermes_cli/update_transient_retry.py",
+    ):
+        assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
