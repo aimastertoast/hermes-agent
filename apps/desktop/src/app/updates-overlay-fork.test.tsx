@@ -3,16 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n/context'
 import { en } from '@/i18n/en'
-import type { UpdateReceipt } from '@/types/hermes'
 import {
   $lastReceipt,
   $lastReceiptAcknowledged,
+  $updateApply,
+  $updateChecking,
   $updateOverlayOpen,
   $updateOverlayTarget,
   $updateStatus
 } from '@/store/updates'
+import type { UpdateReceipt } from '@/types/hermes'
 
-import { UpdatesOverlay } from './updates-overlay'
+import { UpdatesOverlay } from './updates-overlay-fork'
 
 // Mock the system API so we control the receipt hydrate. The overlay's mount
 // effect calls getLastReceipt() unconditionally, so the mock needs to be set
@@ -43,6 +45,16 @@ afterEach((): void => {
   $updateOverlayOpen.set(false)
   $updateOverlayTarget.set('client')
   $updateStatus.set(null)
+  $updateChecking.set(false)
+  $updateApply.set({
+    applying: false,
+    command: null,
+    error: null,
+    log: [],
+    message: '',
+    percent: null,
+    stage: 'idle'
+  })
   $lastReceipt.set(null)
   $lastReceiptAcknowledged.set(true)
   Reflect.deleteProperty(window, 'hermesDesktop')
@@ -160,5 +172,61 @@ describe('UpdatesOverlay — receipt-driven idle view', (): void => {
     // Optimistic local update: the pane closes without waiting on the round-
     // trip. The Acknowledge button is gone once the flag flips.
     expect(screen.queryByTestId('updates-overlay-acknowledge')).toBeNull()
+  })
+
+  it('does not render the receipt pane while a check is in flight', async (): Promise<void> => {
+    apiMock.getLastReceipt.mockResolvedValue(FAILED_RECEIPT)
+    $lastReceiptAcknowledged.set(false)
+    $updateChecking.set(true)
+
+    await renderOverlay()
+
+    // A live check owns the view while it runs -- the receipt must not
+    // replace it, or the two views would fight over the same dialog.
+    expect(screen.queryByTestId('updates-overlay-receipt-error')).toBeNull()
+  })
+
+  it('does not render the receipt pane while an update is being applied', async (): Promise<void> => {
+    apiMock.getLastReceipt.mockResolvedValue(FAILED_RECEIPT)
+    $lastReceiptAcknowledged.set(false)
+    $updateApply.set({
+      applying: true,
+      command: null,
+      error: null,
+      log: [],
+      message: '',
+      percent: 10,
+      stage: 'fetch'
+    })
+
+    await renderOverlay()
+
+    // An apply in flight owns the view: the receipt pane is idle-phase copy
+    // and would show stale "the update failed" text over a running update.
+    expect(screen.queryByTestId('updates-overlay-receipt-error')).toBeNull()
+  })
+
+  it('dispatches the auto-check while the fork owns the overlay', async (): Promise<void> => {
+    const checkClientMock = vi.fn(async () => ({ fetchedAt: Date.now(), supported: true }))
+
+    window.hermesDesktop = {
+      updates: { check: checkClientMock }
+    } as unknown as Window['hermesDesktop']
+    apiMock.getLastReceipt.mockResolvedValue(FAILED_RECEIPT)
+    $lastReceiptAcknowledged.set(false)
+    // The receipt is already there on the FIRST render, so the fork's dialog
+    // owns the overlay from the start and upstream's overlay -- the module
+    // that normally fires the auto-check -- is never mounted.
+    $lastReceipt.set(FAILED_RECEIPT)
+
+    await renderOverlay()
+
+    await waitFor(() => {
+      expect(checkClientMock).toHaveBeenCalled()
+    })
+    // ONE check per open: upstream's effect re-fires whenever a check ends
+    // without a status, which would tear the fork's dialog down and rebuild
+    // it on every pass.
+    expect(checkClientMock).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,7 +1,6 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useState } from 'react'
 
-import { acknowledgeReceipt, getLastReceipt } from '@/api/update-receipts'
 import { SETTINGS_ROUTE } from '@/app/routes'
 import { SETTING_IDS } from '@/app/settings/settings-manifest'
 import { settingsSearchTargetQuery } from '@/app/settings/settings-search'
@@ -19,7 +18,7 @@ import {
 import { ErrorIcon, ErrorState } from '@/components/ui/error-state'
 import { Loader } from '@/components/ui/loader'
 import { Progress } from '@/components/ui/progress'
-import { UpdateStatusCard, VersionHero, deriveUpdateStatusFromReceipt } from '@/components/update-status'
+import { UpdateStatusCard, VersionHero } from '@/components/update-status'
 import { VersionDetails } from '@/components/version-details'
 import type {
   DesktopUpdateCommit,
@@ -39,8 +38,6 @@ import {
   $backendUpdateChecking,
   $backendUpdateStatus,
   $desktopVersion,
-  $lastReceipt,
-  $lastReceiptAcknowledged,
   $updateApply,
   $updateChecking,
   $updateOverlayOpen,
@@ -194,38 +191,6 @@ export function UpdatesOverlay() {
     }
   }, [check, checking, open, status])
 
-  // Hydrate the durable update receipt once per overlay mount. The receipt is
-  // the source of truth for what the orchestrator actually did; without this
-  // fetch the overlay would fall back to a generic "couldn't reach the update
-  // server" lie when the check itself was fine but the apply failed.
-  useEffect(() => {
-    let cancelled = false
-
-    // Defer the call through `Promise.resolve().then(...)` so a synchronous
-    // throw from `hermesApi` (e.g. when the bridge is unavailable in tests)
-    // becomes an async rejection the `.catch` below can swallow — otherwise
-    // a missing `window.hermesDesktop.api` would bubble out of the effect and
-    // unmount the dialog during render.
-    Promise.resolve()
-      .then(() => getLastReceipt())
-      .then(receipt => {
-        if (cancelled) {
-          return
-        }
-
-        $lastReceipt.set(receipt)
-      })
-      .catch(() => {
-        // Best-effort: a missing receipt is normal (fresh install, network
-        // down, bridge unavailable), so we don't surface it — the overlay's
-        // idle view already covers the "no receipt" state.
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   const behind = status?.behind ?? 0
   const updateAvailable = status?.updateAvailable || behind > 0
 
@@ -342,19 +307,6 @@ function IdleView({
   const { t } = useI18n()
   const u = t.updates
   const notes = useUpdateNotes(status, updateAvailable)
-  const receipt = useStore($lastReceipt)
-  const acknowledged = useStore($lastReceiptAcknowledged)
-  const receiptView = deriveUpdateStatusFromReceipt(receipt, u)
-
-  // The orchestrator ran and left a non-success outcome the user hasn't
-  // dismissed yet: surface the receipt's actual error instead of the
-  // generic check-failed copy. We only override the top of the view when
-  // no live check is in flight and there's nothing the idle view would
-  // otherwise render — once a fresh check resolves to "update available"
-  // (or to nothing), the receipt-driven pane no longer adds information.
-  if (receipt && receipt.outcome !== 'success' && !acknowledged && !checking && !status) {
-    return <ReceiptErrorView receiptView={receiptView} receipt={receipt} onRetryCheck={onRetryCheck} u={u} />
-  }
 
   if (!status && checking) {
     return (
@@ -738,80 +690,6 @@ function CenteredStatus({
       </div>
 
       {action && <div className="flex justify-center">{action}</div>}
-    </div>
-  )
-}
-
-/**
- * Receipt-driven error pane. Rendered from {@link IdleView} when the
- * orchestrator left a non-success, unacknowledged receipt and there is no
- * live check in flight or live status. Surfaces the receipt's actual
- * outcome + step detail (via `deriveUpdateStatusFromReceipt`) instead of
- * the generic check-failed copy, and offers the user a one-click
- * Acknowledge so the pane stays closed across the next boot.
- *
- * `useI18n()` is read inside this component (not in the caller) so the
- * receipt line and error detail resolve against the same locale as the
- * rest of the overlay.
- */
-function ReceiptErrorView({
-  receiptView,
-  receipt,
-  onRetryCheck,
-  u
-}: {
-  receiptView: { action: string | null; error: string | null; line: string; tone: string }
-  receipt: { receipt_id: string }
-  onRetryCheck: () => void
-  u: ReturnType<typeof useI18n>['t']['updates']
-}) {
-  const handleAcknowledge = () => {
-    // Optimistic local update: flip the acknowledged flag immediately so
-    // the overlay closes the receipt-driven pane without waiting on the
-    // backend ack round-trip. The API call is fire-and-forget; if the
-    // request fails the receipt stays in the atom and a later mount
-    // surfaces it again, which is the correct recovery behavior.
-    $lastReceiptAcknowledged.set(true)
-    void acknowledgeReceipt(receipt.receipt_id).catch(() => undefined)
-  }
-
-  return (
-    <div className="grid gap-4 px-6 pb-6 pt-1 pr-8" data-testid="updates-overlay-receipt-error">
-      <div className="flex flex-col items-center gap-2 text-center">
-        <ErrorIcon />
-
-        <DialogTitle className="text-center text-lg font-semibold tracking-tight">{u.errorTitle}</DialogTitle>
-        <DialogDescription className="max-w-prose text-center text-sm leading-5 text-foreground">
-          {receiptView.line}
-        </DialogDescription>
-        {receiptView.error && (
-          <pre className="mt-2 max-h-32 w-full overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-left text-xs text-muted-foreground">
-            {receiptView.error}
-          </pre>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button onClick={onRetryCheck} size="sm" variant="textStrong">
-          {u.checkNow}
-        </Button>
-        <Button data-testid="updates-overlay-acknowledge" onClick={handleAcknowledge} size="sm">
-          {u.acknowledge}
-        </Button>
-        <Button asChild size="sm" variant="text">
-          <a
-            href={`hermes://update/receipt/${encodeURIComponent(receipt.receipt_id)}`}
-            onClick={event => {
-              event.preventDefault()
-              void window.hermesDesktop?.openExternal?.(
-                `hermes://update/receipt/${encodeURIComponent(receipt.receipt_id)}`
-              )
-            }}
-          >
-            {u.viewReceipt}
-          </a>
-        </Button>
-      </div>
     </div>
   )
 }

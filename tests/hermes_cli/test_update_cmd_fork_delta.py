@@ -5,7 +5,8 @@
 line the fork keeps in an upstream-owned file is a line upstream has to edit in the same
 place to stop the update. The fork's code therefore lives in fork-owned modules
 (``hermes_cli/update_cmd_fork.py``, ``hermes_cli/update_transient_retry.py``,
-``hermes_cli/update_receipt_fork.py``, ``hermes_cli/source_check_fork.py``) and only
+``hermes_cli/update_receipt_fork.py``, ``hermes_cli/source_check_fork.py``,
+``apps/desktop/src/app/updates-overlay-fork.tsx``) and only
 thin call sites stay in the upstream-owned files.
 
 Measured against the merge base of HEAD and ``origin/main`` — the base the next merge will
@@ -32,6 +33,22 @@ GIT_TARGET = "hermes_cli/update_cmd_git.py"
 RECEIPT_TARGET = "hermes_cli/update_receipt.py"
 SOURCE_CHECK_TARGET = "hermes_cli/source_check.py"
 SOURCE_CHECK_TEST_TARGET = "tests/hermes_cli/test_source_check.py"
+
+# The Desktop's update overlay must carry NO fork delta either. Upstream keeps
+# editing ``apps/desktop/src/app/updates-overlay.tsx`` (release notes, rollback
+# copy, channel wording), so the fork's receipt pane lives in
+# ``apps/desktop/src/app/updates-overlay-fork.tsx`` instead: it takes the dialog
+# over only while the pane applies and renders upstream's overlay otherwise, so
+# upstream's UI keeps improving without a re-sync.
+DESKTOP_OVERLAY_TARGET = "apps/desktop/src/app/updates-overlay.tsx"
+DESKTOP_OVERLAY_MAX_ADDED = 0
+DESKTOP_OVERLAY_MAX_DELETED = 0
+
+# The fork's wiring points at the fork's overlay instead of upstream's. That
+# ONE import line is the only fork line left in an upstream-owned desktop file.
+DESKTOP_WIRING_TARGET = "apps/desktop/src/app/contrib/wiring.tsx"
+DESKTOP_WIRING_MAX_ADDED = 1
+DESKTOP_WIRING_MAX_DELETED = 1
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
@@ -274,6 +291,54 @@ def test_source_check_test_file_fork_delta_stays_at_zero() -> None:
     )
 
 
+def test_desktop_update_overlay_fork_delta_stays_at_zero() -> None:
+    """The Desktop's update overlay must stay byte-identical to upstream's.
+
+    Upstream keeps editing this file, so every fork line in it is a hunk a
+    merge can collide with -- and a collision aborts ``hermes update`` with
+    exit 1. The fork's receipt pane lives in
+    ``apps/desktop/src/app/updates-overlay-fork.tsx``; this file must carry no
+    fork lines at all.
+    """
+    delta = _fork_delta(DESKTOP_OVERLAY_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= DESKTOP_OVERLAY_MAX_DELETED, (
+        f"{DESKTOP_OVERLAY_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {DESKTOP_OVERLAY_MAX_DELETED}). Restore upstream's content and move the fork's "
+        f"code into apps/desktop/src/app/updates-overlay-fork.tsx."
+    )
+    assert added <= DESKTOP_OVERLAY_MAX_ADDED, (
+        f"{DESKTOP_OVERLAY_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {DESKTOP_OVERLAY_MAX_ADDED}). Even a pure insertion is a hunk upstream can "
+        f"collide with. Move the fork's code into "
+        f"apps/desktop/src/app/updates-overlay-fork.tsx."
+    )
+
+
+def test_desktop_wiring_fork_delta_stays_at_one_import() -> None:
+    """The wiring may point at the fork's overlay -- but only that one import.
+
+    Every other line in ``wiring.tsx`` must stay upstream's: the file is
+    upstream's, and a fork line in it is a hunk upstream has to edit in the
+    same place to collide.
+    """
+    delta = _fork_delta(DESKTOP_WIRING_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= DESKTOP_WIRING_MAX_DELETED, (
+        f"{DESKTOP_WIRING_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {DESKTOP_WIRING_MAX_DELETED}). Only the overlay import may differ."
+    )
+    assert added <= DESKTOP_WIRING_MAX_ADDED, (
+        f"{DESKTOP_WIRING_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {DESKTOP_WIRING_MAX_ADDED}). Only the overlay import may differ -- move "
+        f"anything else into a fork-owned module."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
@@ -283,5 +348,7 @@ def test_fork_modules_exist() -> None:
         "hermes_cli/update_receipt_fork.py",
         "hermes_cli/source_check_fork.py",
         "tests/hermes_cli/test_source_check_fork.py",
+        "apps/desktop/src/app/updates-overlay-fork.tsx",
+        "apps/desktop/src/app/updates-overlay-fork.test.tsx",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
