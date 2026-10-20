@@ -30,9 +30,11 @@ TARGET = "hermes_cli/update_cmd.py"
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
-# update_cmd.py is listed `merge=union` in .gitattributes, and the union driver is only
-# correct while the fork's delta is a PURE INSERTION: a deleted line would end up
-# duplicated next to upstream's version of it.
+# update_cmd.py is NOT listed ``merge=union`` (see .gitattributes for the measured reason:
+# the union driver turns upstream's neighbouring MODIFICATION into a duplicate line, and next
+# to a parenthesised import that is a SyntaxError nobody would catch -- ``hermes_cli.update_cmd``
+# is not in the updater's ``_UPDATE_CRITICAL_MODULES``). A deleted line is still forbidden for
+# the ordinary reason: it is a line upstream has to restore in the same hunk to collide.
 MAX_DELETED = 0
 
 # Functions the fork moved OUT of the upstream-owned file. Re-defining one of them inline
@@ -83,9 +85,7 @@ def test_update_cmd_fork_delta_stays_within_budget() -> None:
     assert deleted <= MAX_DELETED, (
         f"{TARGET}: the fork now DELETES {deleted} line(s) of upstream's file (budget "
         f"{MAX_DELETED}). Every deleted line is a line upstream has to restore in the same "
-        f"hunk to collide, and it breaks the merge=union policy for this file (union would "
-        f"keep upstream's line and the fork's block side by side). Move the fork's change "
-        f"into a fork-owned module."
+        f"hunk to collide. Move the fork's change into a fork-owned module."
     )
     assert added <= MAX_ADDED, (
         f"{TARGET}: the fork now adds {added} line(s) to upstream's file (budget {MAX_ADDED}). "

@@ -220,7 +220,7 @@ def remote_has_branch(root: Path, branch: str) -> bool:
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "ls-remote", "--exit-code", "--heads", "origin", branch],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             timeout=30, **no_prompt_git_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
