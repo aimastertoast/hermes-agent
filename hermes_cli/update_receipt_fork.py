@@ -317,6 +317,38 @@ _LEGACY_UPDATE_FILE_RE = re.compile(
 )
 _LEGACY_UPDATE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
+# ``pm`` receipts (plugin checks, fleet syncs) share the store and can end up
+# in ``latest.json``. They are NOT update runs: their ``outcome`` is about
+# PLUGINS ("updates-available"), and the Desktop's pane reads any non-success
+# outcome as "the last update failed" — so serving one would put a plugin
+# check in front of the user as an update failure.
+_PM_RECEIPT_KINDS = frozenset({"plugin-check", "sync"})
+
+
+def _legacy_root_dir(home: Path) -> Path:
+    """The ROOT store of ``home`` — the store upstream's writers publish to.
+
+    Upstream's own ``_receipt_dir()`` is the seam its writers and its tests
+    point at a fixture directory. Recomputing the path here bypassed that
+    seam, and the route then read a store nobody had written to (upstream's
+    own endpoint test went RED: 404 where a receipt existed). Use upstream's
+    seam when the ambient home IS this home — the only case where the two
+    can differ is a caller reading a home that is not the current one, and
+    there the root is derived from that home instead.
+    """
+    try:
+        from hermes_cli import update_receipt as upstream_receipt
+        from hermes_constants import get_hermes_home
+
+        if Path(get_hermes_home()).resolve() == Path(home).resolve():
+            return Path(upstream_receipt._receipt_dir())
+    except Exception:
+        pass
+
+    from hermes_constants import get_default_hermes_root
+
+    return get_default_hermes_root(home=home).joinpath(*_LEGACY_RECEIPT_SUBDIR)
+
 
 def _legacy_receipt_dirs(home: Path) -> list[Path]:
     """The root store, then the profile's own when they differ.
@@ -326,9 +358,7 @@ def _legacy_receipt_dirs(home: Path) -> list[Path]:
     ROOT home's store. The root is resolved FROM ``home`` (not from the
     process env) so a profile-scoped request reads that profile's root.
     """
-    from hermes_constants import get_default_hermes_root
-
-    root = get_default_hermes_root(home=home).joinpath(*_LEGACY_RECEIPT_SUBDIR)
+    root = _legacy_root_dir(home)
     profile = home.joinpath(*_LEGACY_RECEIPT_SUBDIR)
     try:
         same = root.resolve() == profile.resolve()
@@ -361,6 +391,54 @@ def _legacy_update_receipts(home: Path) -> list[tuple[str, Path, dict[str, Any]]
     return found
 
 
+def _is_update_receipt(payload: dict[str, Any]) -> bool:
+    """Whether a receipt payload is an UPDATE run (not a plugin check / sync).
+
+    Upstream's store is shared: ``pm`` writes plugin-check and fleet-sync
+    receipts into it, and its ``latest.json`` pointer is overwritten by
+    whichever writer ran last — in practice a plugin check. The Desktop's
+    pane reads any non-success outcome as "the last update failed", so a
+    plugin check served here would be shown to the user as an update
+    failure. An update receipt always names its run (``update_id``) or
+    carries the update snapshot (``post_update``); a plugin check does
+    neither.
+    """
+    if str(payload.get("kind") or "") in _PM_RECEIPT_KINDS:
+        return False
+    if "plugin_checks" in payload:
+        return False
+    return bool(
+        payload.get("update_id")
+        or payload.get("action_id")
+        or "post_update" in payload
+        or "pre_update" in payload
+    )
+
+
+def _legacy_pointer_receipts(home: Path) -> list[tuple[Optional[float], dict[str, Any]]]:
+    """The ``latest.json`` pointer of each legacy store, when it is an UPDATE.
+
+    The pointer is upstream's own "latest receipt" contract — the route has
+    always served it, and upstream's endpoint test pins it. It is only a
+    candidate when it is an update receipt: the pointer is overwritten by
+    unrelated writers (plugin checks, fleet syncs), and those must not be
+    served as the last update's outcome.
+    """
+    found: list[tuple[Optional[float], dict[str, Any]]] = []
+    for directory in _legacy_receipt_dirs(home):
+        pointer = directory / "latest.json"
+        if not pointer.is_file():
+            continue
+        try:
+            payload = json.loads(pointer.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or not _is_update_receipt(payload):
+            continue
+        found.append((_completed_at(payload), _legacy_receipt_for_desktop(payload, pointer)))
+    return found
+
+
 def _completed_at(payload: dict[str, Any]) -> Optional[float]:
     """Epoch seconds of a COMPLETED run, or ``None`` when it never finished.
 
@@ -389,7 +467,10 @@ def _legacy_receipt_for_desktop(payload: dict[str, Any], path: Path) -> dict[str
     """
     out = dict(payload)
     match = _LEGACY_UPDATE_FILE_RE.match(path.name)
-    out.setdefault("receipt_id", match.group(2) if match else str(payload.get("update_id") or ""))
+    out.setdefault(
+        "receipt_id",
+        match.group(2) if match else str(payload.get("update_id") or payload.get("action_id") or ""),
+    )
     out.setdefault("acknowledged", False)
     if not out.get("error"):
         stop = payload.get("stop_class") or payload.get("stop_reason")
@@ -416,6 +497,11 @@ def read_latest_update_receipt_dict(home: Path) -> Optional[dict[str, Any]]:
         if finished is None:
             continue
         candidates.append((finished, _legacy_receipt_for_desktop(payload, path)))
+
+    for finished, payload in _legacy_pointer_receipts(home):
+        if finished is None:
+            continue
+        candidates.append((finished, payload))
 
     if not candidates:
         return None

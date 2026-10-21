@@ -183,6 +183,78 @@ class TestLegacyStoreReceipt:
         assert read_latest_update_receipt_dict(isolated_hermes_home) is None
 
 
+class TestLegacyPointerReceipt:
+    """``latest.json`` is upstream's own "latest receipt" pointer, and the
+    route has always served it. It is only a candidate when it is an UPDATE
+    receipt: the pointer is overwritten by unrelated writers (plugin checks,
+    fleet syncs), and the Desktop's pane reads any non-success outcome as
+    "the last update failed"."""
+
+    def _write_pointer(self, home: Path, payload: dict) -> None:
+        directory = home / "logs" / "update_receipts"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "latest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_update_pointer_is_served(self, isolated_hermes_home):
+        """Upstream's endpoint contract: the pointer IS the receipt."""
+        home = isolated_hermes_home
+        self._write_pointer(
+            home,
+            {
+                "action_id": "d" * 32,
+                "finished_at": "2026-10-20T12:07:37.711465+00:00",
+                "outcome": "failed",
+                "steps": [{"name": "merge", "ok": False, "detail": "conflict"}],
+            },
+        )
+
+        payload = read_latest_update_receipt_dict(home)
+
+        assert payload is not None
+        assert payload["outcome"] == "failed"
+        assert payload["steps"][0]["detail"] == "conflict"
+        assert payload["acknowledged"] is False
+
+    def test_plugin_check_pointer_is_not_served(self, isolated_hermes_home):
+        """A plugin check in the pointer must never reach the pane: its
+        outcome ("updates-available") reads as an update failure."""
+        home = isolated_hermes_home
+        self._write_pointer(
+            home,
+            {
+                "finished_at": "2026-10-20T17:41:21.929478+00:00",
+                "kind": "plugin-check",
+                "outcome": "updates-available",
+                "plugin_checks": [],
+            },
+        )
+
+        assert read_latest_update_receipt_dict(home) is None
+
+    def test_newer_archive_receipt_beats_the_pointer(self, isolated_hermes_home):
+        home = isolated_hermes_home
+        self._write_pointer(
+            home,
+            {
+                "action_id": "a" * 32,
+                "finished_at": "2026-10-19T12:07:37.711465+00:00",
+                "outcome": "success",
+            },
+        )
+        _write_legacy_receipt(
+            home,
+            update_id="b" * 32,
+            outcome="failed",
+            finished_at="2026-10-20T12:07:37.711465+00:00",
+            stamp="20261020_120737",
+        )
+
+        payload = read_latest_update_receipt_dict(home)
+
+        assert payload is not None
+        assert payload["receipt_id"] == "b" * 32
+
+
 class TestLegacyStoreAcknowledgement:
     """The acknowledgement is flipped ON THE RECEIPT, in whichever store
     holds it — acknowledging one run must never hide a different one."""
