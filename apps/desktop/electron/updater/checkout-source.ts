@@ -83,14 +83,21 @@ export async function readSourceUpdate(probe: SourceUpdateProbe): Promise<Source
     throw new Error('No Python interpreter is available to check the source update channel.')
   }
 
+  // A fork checkout ships its own check entry: upstream's answers a branch that
+  // lives only on the fork remote with an error the Desktop renders as
+  // "couldn't reach the update server", while the fork's measures it against main.
+  const checker: string = existsSync(path.join(probe.updateRoot, 'hermes_cli', 'source_check_fork.py'))
+    ? 'source_check_fork'
+    : 'source_check'
+
   const args: string[] = [
     ...(managed
-      ? ['--run-module', 'hermes_cli.source_check']
+      ? ['--run-module', `hermes_cli.${checker}`]
       : [
           '-c',
           // Inspect the target checkout's callable, not stderr strings or an editable
           // install elsewhere on sys.path. Exceptions inside a present probe propagate.
-          'from pathlib import Path; import runpy; p = Path("hermes_cli/source_check.py"); entry = runpy.run_path(str(p)).get("main") if p.is_file() else None; entry() if callable(entry) else print("null")'
+          `from pathlib import Path; import runpy; p = Path("hermes_cli/${checker}.py"); entry = runpy.run_path(str(p)).get("main") if p.is_file() else None; entry() if callable(entry) else print("null")`
         ]),
     '--install-root',
     probe.updateRoot,

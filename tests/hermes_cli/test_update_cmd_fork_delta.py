@@ -62,6 +62,16 @@ DESKTOP_UPDATES_STORE_TARGET = "apps/desktop/src/store/updates.ts"
 DESKTOP_UPDATES_STORE_MAX_ADDED = 82
 DESKTOP_UPDATES_STORE_MAX_DELETED = 3
 
+# The Desktop's bridge runs the update check's Python entry. Upstream's entry
+# answers a branch that lives only on the fork remote with
+# ``error="branch-local-only"``, which the About pane renders as "couldn't
+# reach the update server" -- a standstill for every fork install. The bridge
+# picks the fork-owned ``hermes_cli/source_check_fork.py`` entry when the
+# checkout ships one; the delta is that choice alone and must not grow.
+DESKTOP_SOURCE_PROBE_TARGET = "apps/desktop/electron/updater/checkout-source.ts"
+DESKTOP_SOURCE_PROBE_MAX_ADDED = 9
+DESKTOP_SOURCE_PROBE_MAX_DELETED = 2
+
 # The receipt endpoint's route lives in upstream's ``web_routers/actions.py``.
 # The fork's part is the profile-scoped read plus the acknowledge route; the
 # readers themselves live in the fork-owned ``hermes_cli/update_receipt_fork.py``.
@@ -407,6 +417,31 @@ def test_actions_router_fork_delta_stays_within_budget() -> None:
     )
 
 
+def test_desktop_source_probe_fork_delta_stays_within_budget() -> None:
+    """The bridge may choose the fork's check entry -- and nothing more.
+
+    ``checkout-source.ts`` is upstream's file. The fork's check behavior lives
+    in ``hermes_cli/source_check_fork.py``; the bridge only selects it, because
+    upstream's entry would report a fork-local-only branch as an error the
+    About pane renders as "couldn't reach the update server". Any further
+    fork code here is a hunk upstream has to collide with.
+    """
+    delta = _fork_delta(DESKTOP_SOURCE_PROBE_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= DESKTOP_SOURCE_PROBE_MAX_DELETED, (
+        f"{DESKTOP_SOURCE_PROBE_TARGET}: the fork now DELETES {deleted} line(s) of upstream's "
+        f"file (budget {DESKTOP_SOURCE_PROBE_MAX_DELETED}). Every deleted line is a line "
+        f"upstream has to restore in the same hunk to collide."
+    )
+    assert added <= DESKTOP_SOURCE_PROBE_MAX_ADDED, (
+        f"{DESKTOP_SOURCE_PROBE_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {DESKTOP_SOURCE_PROBE_MAX_ADDED}). Move new code into "
+        f"hermes_cli/source_check_fork.py and leave the module selection behind."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
@@ -421,5 +456,6 @@ def test_fork_modules_exist() -> None:
         "apps/desktop/src/app/updates-overlay-fork.test.tsx",
         "apps/desktop/src/store/update-receipt-fork.ts",
         "apps/desktop/src/store/update-receipt-fork.test.ts",
+        "apps/desktop/electron/updater/checkout-source-fork.test.ts",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"

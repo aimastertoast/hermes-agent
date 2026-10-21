@@ -308,3 +308,54 @@ def test_target_tip_missing_locally_is_fetched_once_with_a_deadline(installation
     assert status["behind"] == 2
     assert [c["summary"] for c in status["commits"]] == ["upstream one", "upstream two"]
     assert requests == []
+
+
+@pytest.mark.parametrize("invocation", ["call", "run_module"])
+def test_cli_entry_answers_a_local_only_branch_without_an_error(
+    installation, monkeypatch, capsys, invocation
+):
+    """The Desktop's bridge runs this module as the check's CLI entry.
+
+    It used to run upstream's module (``--run-module hermes_cli.source_check``),
+    which bypassed this file and answered every fork-local-only branch with
+    ``error="branch-local-only"`` -- rendered as the red "couldn't reach the
+    update server" that never went away. The swap is in-process, so the entry
+    point itself must install it before upstream parses the arguments.
+
+    ``run_module`` is the launcher's mechanism (``run_name="__main__"``, so the
+    guard fires and nothing is returned); ``call`` is the manual path's
+    ``runpy.run_path(...).get("main")``. Both must print the JSON exactly once.
+    """
+    import runpy
+    import sys
+
+    from hermes_cli import source_check_fork
+
+    root, _linked, home, _base, _head, _responses, _requests, git = installation
+    _bare_origin(installation)
+    git("checkout", "-q", "-b", "local-work")
+    git("commit", "-q", "--allow-empty", "-m", "fork work")
+    git("checkout", "-q", "main")
+    git("commit", "-q", "--allow-empty", "-m", "upstream one")
+    git("push", "-q", "origin", "main")
+    git("fetch", "-q", "origin")
+    git("checkout", "-q", "local-work")
+
+    monkeypatch.setattr("sys.argv", ["source_check_fork", "--install-root", str(root), "--home", str(home)])
+
+    if invocation == "call":
+        source_check_fork.main()
+    else:
+        # The launcher starts a fresh process; drop the fixture's import so the
+        # module executes exactly as it does there.
+        monkeypatch.delitem(sys.modules, "hermes_cli.source_check_fork", raising=False)
+        runpy.run_module("hermes_cli.source_check_fork", run_name="__main__", alter_sys=True)
+
+    # json.loads rejects a second document: the entry must not run twice.
+    status = json.loads(capsys.readouterr().out)
+    assert "error" not in status, status
+    assert status["branch"] == "local-work"
+    assert status["localOnly"] is True
+    assert status["updateAvailable"] is True
+    # The Desktop offers its channel selector only when the CLI declares it.
+    assert status["channelSelectable"] is True

@@ -240,8 +240,9 @@ def _fork_branch_check():
     The swap is process-wide, not thread-local: for the duration of a check a
     direct ``source_check.check_for_updates`` from another thread would also
     get the fork's branch check. In this repo nothing calls it directly but
-    this module (the three production call sites point here), and the fork's
-    check differs from upstream's only in how a local-only branch is answered.
+    this module (the three production call sites and the Desktop bridge, which
+    runs this file's CLI entry, point here), and the fork's check differs from
+    upstream's only in how a local-only branch is answered.
     """
     global _CHECK_DEPTH, _CHECK_ORIGINAL
     with _CHECK_LOCK:
@@ -269,3 +270,20 @@ def check_for_updates(**kwargs) -> dict:
     """
     with _fork_branch_check():
         return source_check.check_for_updates(**kwargs)
+
+
+def main() -> None:
+    """The CLI entry the Desktop bridge runs (``--run-module hermes_cli.source_check_fork``).
+
+    The bridge used to run upstream's module, which bypassed this file and
+    reported a fork-local-only branch as ``error="branch-local-only"`` -- the
+    Desktop's red "couldn't reach the update server". Argument parsing, the
+    ``--set-channel`` handling and the JSON on stdout stay upstream's own; only
+    the branch check is swapped, and only for this process's one check.
+    """
+    with _fork_branch_check():
+        source_check.main()
+
+
+if __name__ == "__main__":
+    main()
