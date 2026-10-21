@@ -457,12 +457,18 @@ async def get_action_status(name: str, lines: int = 200):
 
 
 def _read_latest_receipt() -> Optional[dict[str, Any]]:
-    """Latest pipeline receipt as a JSON-ready dict, or None on any failure.
+    """Latest COMPLETED update receipt, or None on any failure (never raises).
 
-    Thin pass-through to :func:`read_latest_pipeline_receipt_dict` so the
-    route stays focused on the HTTP contract; the dataclass-to-dict
-    conversion and path-traversal validation live with the storage layer
-    where they can be tested without the FastAPI stack.
+    Thin pass-through to :func:`read_latest_update_receipt_dict` so the
+    route stays focused on the HTTP contract; the store-normalization and
+    path-traversal validation live with the storage layer where they can be
+    tested without the FastAPI stack.
+
+    Reads BOTH receipt stores (the fork's pipeline store and upstream's
+    legacy ``logs/update_receipts/`` archive), because the Desktop's Update
+    button runs the DEFAULT update path -- the one that writes the legacy
+    archive. Reading only the pipeline store returned nothing at all for
+    every update the user actually ran.
 
     Honors the active ``HERMES_HOME`` set by ``_config_profile_scope`` so
     profile-tagged requests (``?profile=X``) read from the target
@@ -470,9 +476,9 @@ def _read_latest_receipt() -> Optional[dict[str, Any]]:
     """
     try:
         from hermes_constants import get_hermes_home
-        from hermes_cli.update_receipt_fork import read_latest_pipeline_receipt_dict
+        from hermes_cli.update_receipt_fork import read_latest_update_receipt_dict
 
-        return read_latest_pipeline_receipt_dict(get_hermes_home())
+        return read_latest_update_receipt_dict(get_hermes_home())
     except Exception:
         return None
 
@@ -526,10 +532,12 @@ async def get_update_receipt(profile: Optional[str] = None):
     convention by flipping ``HERMES_HOME`` via ``_config_profile_scope``
     for the duration of the read.
 
-    Reads from ``<home>/update_receipts/`` — the durable record written
-    by the orchestrator's 7-step pipeline. The legacy
-    ``<home>/logs/update_receipts/latest.json`` path is a separate system
-    (fleet-update / refusal-receipt streams) and is not served here.
+    Reads the newest COMPLETED receipt from both stores: the fork's
+    ``<home>/update_receipts/`` pipeline record and upstream's legacy
+    ``<home>/logs/update_receipts/update_*.json`` archive. The Desktop's
+    Update button runs the DEFAULT update path, which writes the legacy
+    archive — so the legacy store is the one that has a receipt for every
+    update the user actually ran, and it is served here too.
 
     See #81193, #87359, #91277.
     """
@@ -550,19 +558,22 @@ async def acknowledge_update_receipt(receipt_id: str, profile: Optional[str] = N
     the target profile's home, and the dashboard's home may point at a
     different one. Returns ``{"ok": True}`` on success (idempotent — a
     second ack is a no-op) and ``{"ok": False}`` when the receipt id is
-    unknown or fails the path-traversal guard in
-    ``acknowledge_pipeline_receipt``.
+    unknown or fails the id guard.
+
+    The acknowledgement is flipped on the receipt itself, in whichever
+    store holds it (pipeline record or legacy archive file), so
+    acknowledging one run never hides a different one.
 
     The ``receipt_id`` is URI-decoded by FastAPI from the path parameter,
     so any encoding the desktop's ``encodeURIComponent`` added is
-    reversed before the path-traversal regex (16 lowercase hex chars) runs.
+    reversed before the id guard runs.
     """
     with _config_profile_scope(profile):
         try:
             from hermes_constants import get_hermes_home
-            from hermes_cli.update_receipt_fork import acknowledge_pipeline_receipt
+            from hermes_cli.update_receipt_fork import acknowledge_update_receipt as acknowledge
 
-            ok = acknowledge_pipeline_receipt(get_hermes_home(), receipt_id)
+            ok = acknowledge(get_hermes_home(), receipt_id)
         except Exception:
             ok = False
     return {"ok": ok}

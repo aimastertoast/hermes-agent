@@ -25,7 +25,7 @@ import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connec
 import { reconnectGateway } from '@/store/gateway-reconnect'
 import { dismissNotification, notify } from '@/store/notifications'
 import { $connection } from '@/store/session'
-import type { BackendUpdateCheckResponse, UpdateReceipt, UpdateReceiptSummary } from '@/types/hermes'
+import type { BackendUpdateCheckResponse, UpdateReceiptSummary } from '@/types/hermes'
 
 /** Keyed per retired-channel revision: a new retirement (or a revision bump on
  *  the same channel) re-shows the notice, a plain re-check never does. */
@@ -63,10 +63,11 @@ export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
 
 // ── Update-settings atoms (task 9) ───────────────────────────────────────────
 //
-// Renderer-side toggles for the orchestrator's user-facing modes and the most
-// recent durable update receipt. The orchestrator is the source of truth for
-// what runs; these atoms only feed it user preference on each invoke and keep
-// the receipt visible in the overlay so the user can acknowledge it once.
+// Renderer-side toggles for the orchestrator's user-facing modes. The
+// orchestrator is the source of truth for what runs; these atoms only feed it
+// user preference on each invoke. The durable update receipt is NOT here: it
+// lives in the fork-owned store/update-receipt-fork.ts, because the receipt's
+// acknowledged state is a per-receipt fact the server owns.
 
 /** When true, the orchestrator's auto-classifier may run `hermes update`
  *  unattended for changes it can prove safe (no user code touched). Default
@@ -91,21 +92,6 @@ export const $updateSafeModeAuto = persistentAtom<boolean>('hermes.update.safeMo
  *  Persisted — the orchestrator reads it on every invoke.
  */
 export const $updateAllowLocalAhead = persistentAtom<boolean>('hermes.update.allowLocalAhead', false, Codecs.bool)
-
-/** The most recent durable receipt the renderer has loaded. Null when none
- *  exists yet or after the user acknowledges it. NOT persisted — the
- *  authoritative copy lives on disk under ``<home>/update_receipts/``; a
- *  later task will hydrate this atom from main on startup and after each
- *  apply finishes. */
-export const $lastReceipt = atom<UpdateReceipt | null>(null)
-
-/** Whether the user has acknowledged the most recent receipt. Default true
- *  so a fresh install does not re-show an old receipt on first paint. The
- *  apply flow flips it back to false when a new receipt lands; the overlay's
- *  "Acknowledge" action flips it back to true. Persisted so the choice
- *  survives relaunches (re-rendering the receipt on every boot would be
- *  punishing for users who already closed it once). */
-export const $lastReceiptAcknowledged = persistentAtom<boolean>('hermes.update.lastReceiptAck', true, Codecs.bool)
 
 // Client and backend are independently updatable; each keeps its own state.
 export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)
@@ -833,6 +819,11 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
         setUpdateOverlayOpen(false)
         resetUpdateApplyState()
         void relaunchIfBundleStaleAfterInPlaceUpdate()
+
+        if (result.updateAvailable === false) {
+          return result
+        }
+
         notify({
           durationMs: 8000,
           id: UPDATE_TOAST_ID,

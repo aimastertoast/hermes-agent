@@ -119,8 +119,6 @@ const {
   $updateStatus,
   $updateSafeModeAuto,
   $updateAllowLocalAhead,
-  $lastReceipt,
-  $lastReceiptAcknowledged,
   BACKGROUND_UPDATE_CHECK_MS
 } = await import('./updates')
 
@@ -1917,12 +1915,11 @@ describe('discontinued retirement notice', () => {
   })
 })
 
-// Task 9 — settings atoms for the orchestrator's user-facing modes and the
-// last-receipt acknowledgement. Each persistentAtom is created at module
-// load and seeds from the mock storage, so default-value tests rely on the
-// `beforeEach` clearing storage BEFORE the test (true on first load) AND
-// each test resetting the atoms so a previous set() does not leak through
-// the persistent in-memory value.
+// Task 9 — settings atoms for the orchestrator's user-facing modes. Each
+// persistentAtom is created at module load and seeds from the mock storage, so
+// default-value tests rely on the `beforeEach` clearing storage BEFORE the
+// test (true on first load) AND each test resetting the atoms so a previous
+// set() does not leak through the persistent in-memory value.
 describe('updates settings atoms', () => {
   beforeEach(() => {
     storage.clear()
@@ -1933,8 +1930,6 @@ describe('updates settings atoms', () => {
     // default-value assertions below.
     $updateSafeModeAuto.set(false)
     $updateAllowLocalAhead.set(false)
-    $lastReceipt.set(null)
-    $lastReceiptAcknowledged.set(true)
   })
 
   it('$updateSafeModeAuto defaults to false', () => {
@@ -1943,14 +1938,6 @@ describe('updates settings atoms', () => {
 
   it('$updateAllowLocalAhead defaults to false', () => {
     expect($updateAllowLocalAhead.get()).toBe(false)
-  })
-
-  it('$lastReceipt defaults to null', () => {
-    expect($lastReceipt.get()).toBeNull()
-  })
-
-  it('$lastReceiptAcknowledged defaults to true', () => {
-    expect($lastReceiptAcknowledged.get()).toBe(true)
   })
 
   it('setting $updateSafeModeAuto persists', () => {
@@ -1973,11 +1960,5 @@ describe('updates settings atoms', () => {
     $updateSafeModeAuto.set(false)
     expect($updateSafeModeAuto.get()).toBe(false)
     expect(storage.get('hermes.update.safeModeAuto')).toBe('false')
-  })
-
-  it('flipping $lastReceiptAcknowledged back to false persists', () => {
-    $lastReceiptAcknowledged.set(false)
-    expect($lastReceiptAcknowledged.get()).toBe(false)
-    expect(storage.get('hermes.update.lastReceiptAck')).toBe('false')
   })
 })

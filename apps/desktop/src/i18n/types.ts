@@ -3338,8 +3338,9 @@ export interface Translations extends NoticeTranslations {
     updateConflictResolve: string
     updateFailed: string
     /** Receipt-driven overlay actions (Task 13). The Acknowledge button
-     *  flips `$lastReceiptAcknowledged` and POSTs `/receipt/:id/ack`;
-     *  View receipt deep-links into the orchestrator's logged receipt. */
+     *  flips the receipt's own `acknowledged` flag and POSTs
+     *  `/receipt/:id/ack`; View receipt deep-links into the orchestrator's
+     *  logged receipt. */
     acknowledge: string
     viewReceipt: string
   }

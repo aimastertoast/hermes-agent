@@ -24,6 +24,7 @@ import json
 import re
 import secrets
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -283,3 +284,176 @@ def acknowledge_pipeline_receipt(home: Path, receipt_id: str) -> bool:
     tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     tmp.replace(target)
     return True
+
+
+# ---------------------------------------------------------------------------
+# The receipt the DESKTOP reads
+#
+# TWO stores, TWO writers — and the Desktop's Update button uses the one
+# this module used to ignore:
+#
+#   * the PIPELINE store (``<home>/update_receipts/``) — written by the
+#     update orchestrator (``--use-orchestrator``). Typed record, carries its
+#     own ``acknowledged`` flag.
+#   * upstream's LEGACY store (``<root home>/logs/update_receipts/``) — written
+#     by the DEFAULT ``hermes update`` path, which is what the Desktop's
+#     Update button actually runs. Its ``latest.json`` pointer is overwritten
+#     by unrelated writers (plugin checks, fleet syncs), so the last UPDATE
+#     receipt has to be found by scanning the ``update_*.json`` archive.
+#
+# Reading only the pipeline store (what the fork's route used to do) is the
+# same as reading nothing: the default path never writes there, so the
+# Desktop's receipt pane could never show a receipt at all.
+# ---------------------------------------------------------------------------
+
+# ``<root home>/logs/update_receipts`` — upstream's store layout.
+_LEGACY_RECEIPT_SUBDIR = ("logs", "update_receipts")
+
+# ``update_<YYYYMMDD>_<HHMMSS>_<pid>_<update_id>.json`` — the run's start
+# stamp is in the file name, so the archive can be ordered without parsing
+# every payload. ``update_id`` is 32 hex chars (upstream's uuid4().hex).
+_LEGACY_UPDATE_FILE_RE = re.compile(
+    r"^update_(\d{8}_\d{6})_\d+_([0-9a-f]{32})\.json$"
+)
+_LEGACY_UPDATE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _legacy_receipt_dirs(home: Path) -> list[Path]:
+    """The root store, then the profile's own when they differ.
+
+    Mirrors upstream's ``_receipt_dirs()``: an update mutates the checkout
+    every profile shares, so the receipts the Desktop must read live in the
+    ROOT home's store. The root is resolved FROM ``home`` (not from the
+    process env) so a profile-scoped request reads that profile's root.
+    """
+    from hermes_constants import get_default_hermes_root
+
+    root = get_default_hermes_root(home=home).joinpath(*_LEGACY_RECEIPT_SUBDIR)
+    profile = home.joinpath(*_LEGACY_RECEIPT_SUBDIR)
+    try:
+        same = root.resolve() == profile.resolve()
+    except OSError:
+        same = root == profile
+    return [root] if same else [root, profile]
+
+
+def _legacy_update_receipts(home: Path) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Every legacy UPDATE receipt as ``(start stamp, path, payload)``.
+
+    Plugin-check / fleet-sync receipts (``pm_*.json``) are NOT update runs and
+    are skipped — they share the store and would otherwise be mistaken for an
+    update's outcome.
+    """
+    found: list[tuple[str, Path, dict[str, Any]]] = []
+    for directory in _legacy_receipt_dirs(home):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("update_*.json")):
+            match = _LEGACY_UPDATE_FILE_RE.match(path.name)
+            if not match:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                found.append((match.group(1), path, payload))
+    return found
+
+
+def _completed_at(payload: dict[str, Any]) -> Optional[float]:
+    """Epoch seconds of a COMPLETED run, or ``None`` when it never finished.
+
+    A receipt without ``finished_at`` belongs to a run that is still going (or
+    was killed mid-flight): it has no outcome to report, so the Desktop must
+    not present it as the last update's result. The overlay's own live apply
+    state covers the in-flight case.
+    """
+    raw = payload.get("finished_at")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _legacy_receipt_for_desktop(payload: dict[str, Any], path: Path) -> dict[str, Any]:
+    """The legacy receipt plus the three fields the Desktop's pane needs.
+
+    Upstream's legacy receipt already carries ``outcome`` and ``steps`` in the
+    shape the Desktop reads. It lacks the receipt id (it calls it
+    ``update_id``), the acknowledged flag, and an error string — so those are
+    added here. The original fields are kept untouched: the dashboard reads
+    the same receipt and expects upstream's own keys.
+    """
+    out = dict(payload)
+    match = _LEGACY_UPDATE_FILE_RE.match(path.name)
+    out.setdefault("receipt_id", match.group(2) if match else str(payload.get("update_id") or ""))
+    out.setdefault("acknowledged", False)
+    if not out.get("error"):
+        stop = payload.get("stop_class") or payload.get("stop_reason")
+        if stop:
+            out["error"] = str(stop)
+    return out
+
+
+def read_latest_update_receipt_dict(home: Path) -> Optional[dict[str, Any]]:
+    """The latest COMPLETED update receipt, in the shape the Desktop expects.
+
+    Newest across BOTH stores by finish time. ``None`` when no update run has
+    completed yet — the Desktop then shows its generic idle view, exactly as
+    it does on a fresh install.
+    """
+    candidates: list[tuple[float, dict[str, Any]]] = []
+
+    record = read_latest_pipeline_receipt(home)
+    if record is not None and record.finished_at is not None:
+        candidates.append((float(record.finished_at), asdict(record)))
+
+    for _stamp, path, payload in _legacy_update_receipts(home):
+        finished = _completed_at(payload)
+        if finished is None:
+            continue
+        candidates.append((finished, _legacy_receipt_for_desktop(payload, path)))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate[0])[1]
+
+
+def _acknowledge_legacy_receipt(home: Path, receipt_id: str) -> bool:
+    """Flip ``acknowledged`` on the legacy receipt file with this id.
+
+    Same contract as :func:`acknowledge_pipeline_receipt`: idempotent, atomic
+    (temp file + rename), never raises, and the id is validated against a
+    strict hex pattern so a caller can never construct a path outside the
+    receipts directory.
+    """
+    if not _LEGACY_UPDATE_ID_RE.fullmatch(receipt_id):
+        return False
+    for _stamp, path, payload in _legacy_update_receipts(home):
+        if payload.get("update_id") != receipt_id:
+            continue
+        payload["acknowledged"] = True
+        tmp = path.with_name(f".{path.name}.acktmp")
+        try:
+            tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return False
+        return True
+    return False
+
+
+def acknowledge_update_receipt(home: Path, receipt_id: str) -> bool:
+    """Acknowledge a receipt by id, in whichever store holds it.
+
+    The ack lands ON THE RECEIPT (never on a global flag): acknowledging one
+    run must not hide a different one.
+    """
+    if not isinstance(receipt_id, str) or not receipt_id:
+        return False
+    if acknowledge_pipeline_receipt(home, receipt_id):
+        return True
+    return _acknowledge_legacy_receipt(home, receipt_id)

@@ -6,7 +6,8 @@ line the fork keeps in an upstream-owned file is a line upstream has to edit in 
 place to stop the update. The fork's code therefore lives in fork-owned modules
 (``hermes_cli/update_cmd_fork.py``, ``hermes_cli/update_transient_retry.py``,
 ``hermes_cli/update_receipt_fork.py``, ``hermes_cli/source_check_fork.py``,
-``apps/desktop/src/app/updates-overlay-fork.tsx``) and only
+``apps/desktop/src/app/updates-overlay-fork.tsx``,
+``apps/desktop/src/store/update-receipt-fork.ts``) and only
 thin call sites stay in the upstream-owned files.
 
 Measured against the merge base of HEAD and ``origin/main`` — the base the next merge will
@@ -49,6 +50,25 @@ DESKTOP_OVERLAY_MAX_DELETED = 0
 DESKTOP_WIRING_TARGET = "apps/desktop/src/app/contrib/wiring.tsx"
 DESKTOP_WIRING_MAX_ADDED = 1
 DESKTOP_WIRING_MAX_DELETED = 1
+
+# ``apps/desktop/src/store/updates.ts`` is upstream's store, but the fork adds
+# the two update-settings atoms and the post-apply relaunch fix to it. The
+# receipt atoms used to live here too; they moved to the fork-owned
+# ``apps/desktop/src/store/update-receipt-fork.ts`` (a global "acknowledged"
+# boolean was never reset, so it hid every receipt forever -- the server owns
+# the per-receipt flag). The budget below is the measured delta AFTER that
+# move, so the remaining delta cannot grow back.
+DESKTOP_UPDATES_STORE_TARGET = "apps/desktop/src/store/updates.ts"
+DESKTOP_UPDATES_STORE_MAX_ADDED = 82
+DESKTOP_UPDATES_STORE_MAX_DELETED = 3
+
+# The receipt endpoint's route lives in upstream's ``web_routers/actions.py``.
+# The fork's part is the profile-scoped read plus the acknowledge route; the
+# readers themselves live in the fork-owned ``hermes_cli/update_receipt_fork.py``.
+# The budget is the measured delta, so the route cannot grow back.
+ACTIONS_ROUTER_TARGET = "hermes_cli/web_routers/actions.py"
+ACTIONS_ROUTER_MAX_ADDED = 103
+ACTIONS_ROUTER_MAX_DELETED = 15
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
@@ -339,6 +359,54 @@ def test_desktop_wiring_fork_delta_stays_at_one_import() -> None:
     )
 
 
+def test_desktop_updates_store_fork_delta_stays_within_budget() -> None:
+    """The Desktop's update store may keep its fork delta, but only this much.
+
+    ``apps/desktop/src/store/updates.ts`` is upstream's file: the fork adds the
+    two update-settings atoms and the post-apply relaunch fix to it. The receipt
+    atoms were moved OUT to ``apps/desktop/src/store/update-receipt-fork.ts``
+    (the fork-owned module the overlay imports), so this budget is the delta
+    that is left -- it must not grow back.
+    """
+    delta = _fork_delta(DESKTOP_UPDATES_STORE_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= DESKTOP_UPDATES_STORE_MAX_DELETED, (
+        f"{DESKTOP_UPDATES_STORE_TARGET}: the fork now DELETES {deleted} line(s) of upstream's "
+        f"file (budget {DESKTOP_UPDATES_STORE_MAX_DELETED}). Every deleted line is a line "
+        f"upstream has to restore in the same hunk to collide."
+    )
+    assert added <= DESKTOP_UPDATES_STORE_MAX_ADDED, (
+        f"{DESKTOP_UPDATES_STORE_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {DESKTOP_UPDATES_STORE_MAX_ADDED}). Move new code into a fork-owned module "
+        f"(e.g. apps/desktop/src/store/update-receipt-fork.ts) and leave a call site behind."
+    )
+
+
+def test_actions_router_fork_delta_stays_within_budget() -> None:
+    """The receipt route's fork delta must not grow back.
+
+    ``hermes_cli/web_routers/actions.py`` is upstream's file. The fork's part
+    is the profile-scoped receipt read plus the acknowledge route; the readers
+    live in the fork-owned ``hermes_cli/update_receipt_fork.py``.
+    """
+    delta = _fork_delta(ACTIONS_ROUTER_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= ACTIONS_ROUTER_MAX_DELETED, (
+        f"{ACTIONS_ROUTER_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {ACTIONS_ROUTER_MAX_DELETED}). Every deleted line is a line upstream has to "
+        f"restore in the same hunk to collide."
+    )
+    assert added <= ACTIONS_ROUTER_MAX_ADDED, (
+        f"{ACTIONS_ROUTER_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {ACTIONS_ROUTER_MAX_ADDED}). Move new code into a fork-owned module "
+        f"(e.g. hermes_cli/update_receipt_fork.py) and leave a call site behind."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
@@ -348,7 +416,10 @@ def test_fork_modules_exist() -> None:
         "hermes_cli/update_receipt_fork.py",
         "hermes_cli/source_check_fork.py",
         "tests/hermes_cli/test_source_check_fork.py",
+        "hermes_cli/tests/update/test_update_receipt_legacy.py",
         "apps/desktop/src/app/updates-overlay-fork.tsx",
         "apps/desktop/src/app/updates-overlay-fork.test.tsx",
+        "apps/desktop/src/store/update-receipt-fork.ts",
+        "apps/desktop/src/store/update-receipt-fork.test.ts",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"

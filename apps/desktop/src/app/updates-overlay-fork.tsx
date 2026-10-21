@@ -7,7 +7,7 @@
  * (exit 1 -- the Desktop's "Update failed (exit 1)" banner). The fork's
  * behavior lives here instead:
  *
- *  * the durable update receipt is hydrated once per overlay mount, and
+ *  * the durable update receipt is hydrated every time the overlay opens, and
  *  * a non-success, unacknowledged receipt replaces the generic
  *    "couldn't check for updates" copy with the receipt's real outcome, an
  *    Acknowledge action and a link to the receipt.
@@ -31,12 +31,11 @@ import {
 import { ErrorIcon } from '@/components/ui/error-state'
 import { deriveUpdateStatusFromReceipt } from '@/components/update-status'
 import { useI18n } from '@/i18n'
+import { $lastReceipt } from '@/store/update-receipt-fork'
 import {
   $backendUpdateApply,
   $backendUpdateChecking,
   $backendUpdateStatus,
-  $lastReceipt,
-  $lastReceiptAcknowledged,
   $updateApply,
   $updateChecking,
   $updateOverlayOpen,
@@ -49,6 +48,10 @@ import {
 import type { UpdateReceipt } from '@/types/hermes'
 
 import { UpdatesOverlay as UpstreamUpdatesOverlay } from './updates-overlay'
+
+/** How long to wait before the second (and last) attempt at hydrating the
+ *  receipt. Long enough for the desktop backend to finish spawning. */
+const RECEIPT_HYDRATE_RETRY_MS = 2000
 
 export function UpdatesOverlay() {
   const open = useStore($updateOverlayOpen)
@@ -70,57 +73,64 @@ export function UpdatesOverlay() {
   // One auto-check per open, tracked across the overlay's whole life.
   const checkedForOpen = useRef(false)
 
-  // Hydrate the durable update receipt once per overlay mount. The receipt is
-  // the source of truth for what the orchestrator actually did; without this
-  // fetch the overlay would fall back to a generic "couldn't reach the update
-  // server" lie when the check itself was fine but the apply failed.
+  // Hydrate the durable update receipt when the overlay OPENS -- not once per
+  // mount. The overlay stays mounted for the app's whole life, so a
+  // mount-time fetch that failed (backend still spawning, transport error)
+  // left the pane dead for the entire session, with no way to recover except
+  // a restart.
   useEffect(() => {
+    if (!open) {
+      return
+    }
+
     let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
 
-    // Defer the call through `Promise.resolve().then(...)` so a synchronous
-    // throw from `hermesApi` (e.g. when the bridge is unavailable in tests)
-    // becomes an async rejection the `.catch` below can swallow -- otherwise
-    // a missing `window.hermesDesktop.api` would bubble out of the effect and
-    // unmount the dialog during render.
-    Promise.resolve()
-      .then(() => getLastReceipt())
-      .then(receipt => {
-        if (cancelled) {
-          return
-        }
+    const load = (): Promise<void> =>
+      Promise.resolve()
+        .then(() => getLastReceipt())
+        .then(receipt => {
+          if (!cancelled) {
+            $lastReceipt.set(receipt)
+          }
+        })
 
-        $lastReceipt.set(receipt)
-      })
-      .catch(() => {
-        // Best-effort: a missing receipt is normal (fresh install, network
-        // down, bridge unavailable), so we don't surface it -- the overlay's
-        // idle view already covers the "no receipt" state.
-      })
+    // One retry: the first request can land while the desktop backend is
+    // still spawning, and the desktop's own spawn deadline rejects it.
+    load().catch(() => {
+      if (cancelled) {
+        return
+      }
+
+      retry = setTimeout(() => {
+        void load().catch(() => undefined)
+      }, RECEIPT_HYDRATE_RETRY_MS)
+    })
 
     return () => {
       cancelled = true
+
+      if (retry !== undefined) {
+        clearTimeout(retry)
+      }
     }
-  }, [])
+  }, [open])
 
   const receipt = useStore($lastReceipt)
-  const acknowledged = useStore($lastReceiptAcknowledged)
 
   // The pane replaces upstream's IDLE view, so it is gated on the same
   // conditions upstream gates that view on: the idle phase, and (for the
-  // client) no retirement notice. It also only applies when the idle view
-  // would have nothing else to render -- no live check in flight and no live
-  // status -- because once a fresh check resolves to "update available" (or
-  // to nothing), the receipt-driven pane no longer adds information.
+  // client) no retirement notice.
   const idlePhase = apply.stage === 'idle' && !apply.applying
 
+  // The pane wins over upstream's "an update is available" pitch ON PURPOSE.
+  // A failed update leaves the checkout BEHIND origin -- so `behind > 0` and
+  // `updateAvailable` is true -- which is exactly when the user most needs to
+  // read WHY the last update failed instead of being offered the same update
+  // that just failed. The acknowledgement is the dismissal: once the user has
+  // seen the failure, upstream's pitch comes back.
   const receiptPane =
-    receipt &&
-    receipt.outcome !== 'success' &&
-    !acknowledged &&
-    !checking &&
-    idlePhase &&
-    (isBackend || !status?.retirement) &&
-    !status
+    receipt && receipt.outcome !== 'success' && !receipt.acknowledged && idlePhase && (isBackend || !status?.retirement)
       ? receipt
       : null
 
@@ -169,11 +179,11 @@ export function UpdatesOverlay() {
 
 /**
  * Receipt-driven error pane. Rendered instead of upstream's idle view when
- * the orchestrator left a non-success, unacknowledged receipt and there is no
- * live check in flight or live status. Surfaces the receipt's actual outcome +
- * step detail (via `deriveUpdateStatusFromReceipt`) instead of the generic
- * check-failed copy, and offers the user a one-click Acknowledge so the pane
- * stays closed across the next boot.
+ * the last update run left a non-success, unacknowledged receipt.
+ * Surfaces the receipt's actual outcome + step detail
+ * (via `deriveUpdateStatusFromReceipt`) instead of the generic check-failed
+ * copy, and offers the user a one-click Acknowledge so the pane stays closed
+ * across the next boot.
  */
 function ReceiptErrorView({ onRetryCheck, receipt }: { onRetryCheck: () => void; receipt: UpdateReceipt }) {
   const { t } = useI18n()
@@ -181,13 +191,23 @@ function ReceiptErrorView({ onRetryCheck, receipt }: { onRetryCheck: () => void;
   const receiptView = deriveUpdateStatusFromReceipt(receipt, u)
 
   const handleAcknowledge = () => {
-    // Optimistic local update: flip the acknowledged flag immediately so
-    // the overlay closes the receipt-driven pane without waiting on the
-    // backend ack round-trip. The API call is fire-and-forget; if the
-    // request fails the receipt stays in the atom and a later mount
-    // surfaces it again, which is the correct recovery behavior.
-    $lastReceiptAcknowledged.set(true)
-    void acknowledgeReceipt(receipt.receipt_id).catch(() => undefined)
+    // Optimistic local update: mark the receipt acknowledged right away so
+    // the pane closes without waiting for the backend ack round-trip. The
+    // server owns the durable flag (the receipt's own `acknowledged` field),
+    // so a failed ack means the receipt comes back -- the correct recovery
+    // behavior, as long as the failure is actually noticed: the server
+    // answers `{ok: false}` (a RESOLVED promise) when it refuses the id, so
+    // a `.catch` alone would treat a refusal as a success.
+    $lastReceipt.set({ ...receipt, acknowledged: true })
+    void acknowledgeReceipt(receipt.receipt_id)
+      .then(result => {
+        if (result?.ok === false) {
+          $lastReceipt.set(receipt)
+        }
+      })
+      .catch(() => {
+        $lastReceipt.set(receipt)
+      })
   }
 
   return (
