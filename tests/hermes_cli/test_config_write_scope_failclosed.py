@@ -1,7 +1,7 @@
 """G2 guard rail: on a host serving several profiles, a config write with no
 explicit profile is REFUSED (409) — it previously defaulted to the launch
-profile and wrote the wrong tenant's config (2026-09-25: connecting Bobby's
-MCP servers in the GUI wrote them into Nana's config.yaml). Same contract as
+profile and wrote the wrong tenant's config (2026-09-25: connecting Alpha's
+MCP servers in the GUI wrote them into Beta's config.yaml). Same contract as
 ``destructive_profile``; 409 so clients distinguish it from route-level 400s.
 """
 import json
@@ -14,7 +14,7 @@ from fastapi import HTTPException
 @pytest.fixture(autouse=True)
 def _multiplex_state_is_per_test():
     """Multi-profile activation is a one-way PROCESS-global flip; contain it."""
-    import agent.secret_scope as secret_scope
+    from agent import secret_scope
     from tui_gateway import launch_profile_policy
 
     was_active = secret_scope.is_multiplex_active()

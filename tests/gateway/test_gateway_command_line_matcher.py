@@ -175,7 +175,7 @@ def test_accepts_atomic_desktop_gateway():
 RELAUNCH_BOOTSTRAP = (
     r"C:\hermes\tools\python-3.14.7\python.exe -I -c "
     "import sys, runpy; sys.path.insert(0, 'C:\\\\hermes\\\\hermes-agent'); "
-    "sys.argv = ['C:\\\\hermes\\\\hermes-agent\\\\hermes_cli\\\\main.py', '--profile', 'bobby', "
+    "sys.argv = ['C:\\\\hermes\\\\hermes-agent\\\\hermes_cli\\\\main.py', '--profile', 'alpha', "
     "'gateway', 'run']; runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
 )
 

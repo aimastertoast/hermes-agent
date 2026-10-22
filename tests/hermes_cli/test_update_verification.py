@@ -13,27 +13,27 @@ from hermes_cli import update_verification as uv
 @pytest.fixture
 def two_homes(tmp_path, monkeypatch):
     root = tmp_path / "root"
-    bobby = root / "profiles" / "bobby"
-    bobby.mkdir(parents=True)
+    alpha = root / "profiles" / "alpha"
+    alpha.mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(root))
     seeds = (
         (root, {"github": {"command": "npx", "args": ["-y", "pkg"], "enabled": True}}),
-        (bobby, {"lovable": {"url": "https://mcp.example", "enabled": False}}),
+        (alpha, {"mailer": {"url": "https://mcp.example", "enabled": False}}),
     )
     for home, servers in seeds:
         (home / "config.yaml").write_text(yaml.safe_dump({
             "mcp_servers": servers,
             "custom_providers": {"ark": {"base_url": "https://ark.example"}},
         }), encoding="utf-8")
-    return {"root": root, "bobby": bobby}
+    return {"root": root, "alpha": alpha}
 
 
 def test_capture_roundtrip_and_parity(two_homes):
     state = uv.capture_pre_state(
-        [("default", two_homes["root"]), ("bobby", two_homes["bobby"])], backup=False)
-    assert state["profiles"]["bobby"]["root_keys"] == ["custom_providers", "mcp_servers"]
-    assert state["profiles"]["bobby"]["mcp_fingerprint"] == {
-        "lovable": {"enabled": False, "command": None, "url": "https://mcp.example"}}
+        [("default", two_homes["root"]), ("alpha", two_homes["alpha"])], backup=False)
+    assert state["profiles"]["alpha"]["root_keys"] == ["custom_providers", "mcp_servers"]
+    assert state["profiles"]["alpha"]["mcp_fingerprint"] == {
+        "mailer": {"enabled": False, "command": None, "url": "https://mcp.example"}}
     assert state["gateway_was_running"] is False  # no gateway_state.json in tmp home
     ok, _ = uv.check_config_parity(state)
     assert ok
@@ -52,10 +52,10 @@ def test_dropped_key_fails_config_parity(two_homes):
 
 
 def test_fingerprint_drift_detected(two_homes):
-    state = uv.capture_pre_state([("bobby", two_homes["bobby"])], backup=False)
-    raw = yaml.safe_load((two_homes["bobby"] / "config.yaml").read_text(encoding="utf-8"))
-    raw["mcp_servers"]["lovable"]["enabled"] = True
-    (two_homes["bobby"] / "config.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    state = uv.capture_pre_state([("alpha", two_homes["alpha"])], backup=False)
+    raw = yaml.safe_load((two_homes["alpha"] / "config.yaml").read_text(encoding="utf-8"))
+    raw["mcp_servers"]["mailer"]["enabled"] = True
+    (two_homes["alpha"] / "config.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
     ok, detail = uv.check_mcp_fingerprint_parity(state)
     assert not ok
     assert "changed" in detail

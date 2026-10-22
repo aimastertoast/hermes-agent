@@ -59,17 +59,17 @@ describe('SettingsProfileScope', () => {
   // simultaneously. The active class on the chip is `bg-(--ui-bg-tertiary)`;
   // exactly one chip may carry it after a click.
   it('marks exactly one chip as active after a chip click', () => {
-    $profiles.set([profile('default', true), profile('bobby')])
+    $profiles.set([profile('default', true), profile('alpha')])
 
     const { container } = render(<SettingsProfileScope />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'bobby' }))
+    fireEvent.click(screen.getByRole('button', { name: 'alpha' }))
 
     const activeChips = Array.from(container.querySelectorAll('button')).filter(button =>
       button.className.includes('bg-(--ui-bg-tertiary)')
     )
     expect(activeChips).toHaveLength(1)
-    expect(activeChips[0]?.textContent).toBe('bobby')
+    expect(activeChips[0]?.textContent).toBe('alpha')
   })
 
   // #89190/#89162 class: after opening a Bot Mode chat, the ACTIVE profile is

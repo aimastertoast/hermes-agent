@@ -21,7 +21,7 @@ def test_command_line_belongs_to_profile_runpy_bootstrap():
     INSIDE the -c source, so whitespace tokenization sees ``'--profile',`` (quote and
     comma attached) and the named-profile gateway reads as bare. Parse the embedded
     argv literal so the relaunched gateway is attributed to its profile (the updater's
-    resume verification declared a healthy bobby gateway dead this way, exit 1)."""
+    resume verification declared a healthy alpha gateway dead this way, exit 1)."""
     bootstrap = (
         'c:/hermes/tools/python.exe -I -c import sys, runpy; '
         'sys.path.insert(0, "c:/hermes/hermes-agent"); '

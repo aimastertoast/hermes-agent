@@ -39,7 +39,7 @@ export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
 // agent pre-warm behind it. But the resume still has to route the session's
 // MCP servers before the RPC returns, and on an install with several remote
 // MCP servers that discovery legitimately runs for minutes — measured here at
-// 8 servers, where the server kept registering tools (resend 106, lovable 45,
+// 8 servers, where the server kept registering tools (mailer 106, mailer 45,
 // chrome-devtools 30) for 35+ s AFTER the generic 30 s default had already
 // rejected. The user saw "Continue failed" on a resume that then completed
 // underneath them, and the same toast appeared on a healthy install right

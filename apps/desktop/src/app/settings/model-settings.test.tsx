@@ -145,7 +145,7 @@ describe('ModelSettings profile scope', () => {
   // contract: when scopeProfile flips, the displayed Select trigger MUST show
   // the new profile's model — not preserve the previous chip's draft.
   it('repaints the Select trigger with the new chip\'s model on a mid-mount scope change', async () => {
-    // First chip: "bobby" — SenseNova + deepseek. The initial render seeds
+    // First chip: "alpha" — SenseNova + deepseek. The initial render seeds
     // selectedProvider / selectedModel from the fetched modelInfo.
     getGlobalModelInfo
       .mockResolvedValueOnce({ provider: 'sensenova', model: 'deepseek-v4-flash' })
@@ -192,27 +192,27 @@ describe('ModelSettings profile scope', () => {
     const { rerender } = render(
       <MemoryRouter>
         <QueryClientProvider client={client}>
-          <ModelSettings scopeProfile="bobby" />
+          <ModelSettings scopeProfile="alpha" />
         </QueryClientProvider>
       </MemoryRouter>
     )
 
     // Wait for the first chip's data to seed the Select trigger.
-    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalledWith('bobby'))
+    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalledWith('alpha'))
     const triggers = await screen.findAllByRole('combobox')
     await waitFor(() => expect(triggers[0].textContent).toContain('SenseNova'))
 
-    // Second chip click: "nana" — same mounted ModelSettings, only the
+    // Second chip click: "beta" — same mounted ModelSettings, only the
     // scopeProfile prop changes (mirrors the in-app chip click flow).
     rerender(
       <MemoryRouter>
         <QueryClientProvider client={client}>
-          <ModelSettings scopeProfile="nana" />
+          <ModelSettings scopeProfile="beta" />
         </QueryClientProvider>
       </MemoryRouter>
     )
 
-    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalledWith('nana'))
+    await waitFor(() => expect(getGlobalModelInfo).toHaveBeenCalledWith('beta'))
     const triggersAfter = screen.getAllByRole('combobox')
     await waitFor(() => expect(triggersAfter[0].textContent).toContain('Volces Ark'))
     // The PREVIOUS chip's provider/model must NOT linger in the trigger text.

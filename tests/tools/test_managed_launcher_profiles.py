@@ -1,6 +1,6 @@
 """Sub-profiles must resolve bare Node/uv launchers through PM, not a per-profile tree.
 
-Evidence: under HERMES_HOME=<root>/profiles/bobby, bare ``npx`` crashed every
+Evidence: under HERMES_HOME=<root>/profiles/alpha, bare ``npx`` crashed every
 stdio MCP server with WinError 2 because the runtime was looked up in the
 profile's own home (2026-09-25, reproduced end-to-end). The old
 ``<home>/node`` managed tree is now retired from runtime selection, so the
@@ -44,9 +44,9 @@ def pm_npm(tmp_path, monkeypatch):
 
 def _sub_profile(root):
     """HERMES_HOME for a sub-profile, which carries no managed tree of its own."""
-    bobby = root / "profiles" / "bobby"
-    bobby.mkdir(parents=True)
-    return bobby
+    alpha = root / "profiles" / "alpha"
+    alpha.mkdir(parents=True)
+    return alpha
 
 
 def test_bare_npx_resolves_from_sub_profile(tmp_path, monkeypatch, pm_npm):
@@ -61,11 +61,11 @@ def test_bare_npx_resolves_from_sub_profile(tmp_path, monkeypatch, pm_npm):
 
 def test_stale_per_profile_tree_is_ignored(tmp_path, monkeypatch, pm_npm):
     """A leftover <profile>/node tree must not shadow the machine-scoped PM copy."""
-    bobby = _sub_profile(tmp_path / "root")
-    stale = bobby / "node"
+    alpha = _sub_profile(tmp_path / "root")
+    stale = alpha / "node"
     stale.mkdir()
     (stale / ("npx.cmd" if os.name == "nt" else "npx")).write_text("stale", encoding="utf-8")
-    monkeypatch.setenv("HERMES_HOME", str(bobby))
+    monkeypatch.setenv("HERMES_HOME", str(alpha))
 
     resolved = _managed_launcher("npx")
 

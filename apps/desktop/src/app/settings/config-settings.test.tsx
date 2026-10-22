@@ -161,7 +161,7 @@ describe('ConfigSettings autosave', () => {
     // was free to land any time, and the row that painted first won.
     getHermesConfigRecord.mockImplementation((profile?: string) =>
       Promise.resolve(
-        profile === 'bobby'
+        profile === 'alpha'
           ? { compression: { codex_gpt55_autoraise: true } }
           : { compression: { codex_gpt55_autoraise: false } }
       )
@@ -170,20 +170,20 @@ describe('ConfigSettings autosave', () => {
       fields: { 'compression.codex_gpt55_autoraise': { type: 'boolean' } }
     })
 
-    scopeProfileMock.set('bobby')
+    scopeProfileMock.set('alpha')
     vi.useFakeTimers({ shouldAdvanceTime: true })
 
     try {
       renderConfigSettings('memory')
 
-      await vi.waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalledWith('bobby'))
+      await vi.waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalledWith('alpha'))
       expect(await screen.findByRole('switch')).toBeTruthy()
 
-      // User clicks the Nana chip.
-      scopeProfileMock.set('nana')
+      // User clicks the Beta chip.
+      scopeProfileMock.set('beta')
 
-      // Inner component remounts (key={scopeProfile}) and re-reads under 'nana'.
-      await vi.waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalledWith('nana'))
+      // Inner component remounts (key={scopeProfile}) and re-reads under 'beta'.
+      await vi.waitFor(() => expect(getHermesConfigRecord).toHaveBeenCalledWith('beta'))
     } finally {
       vi.useRealTimers()
     }
