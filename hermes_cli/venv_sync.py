@@ -396,6 +396,14 @@ def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
         return _prepare_borrowed_launch(root, owner, current=current)
     pending = completion_pending_path(root)
     owed_to_cli = current and pending.is_file() and _supervised_child()
+    # FORK: the Desktop's own commands leave the owed tail to `hermes update` too -- see
+    # hermes_cli/update_desktop_tail.py. An inline tail holds the update lock, and the live
+    # marker fences the gateway, so the Desktop fenced the gateway it was starting and could
+    # not start at all. The tail belongs to `hermes update`.
+    from hermes_cli.update_desktop_tail import desktop_owes_tail
+
+    if current and pending.is_file() and desktop_owes_tail(command):
+        owed_to_cli = True
     _may_retry, _attempts, _backoff = completion_retry_state(root)
     if not _may_retry and _attempts >= COMPLETION_RETRY_MAX_ATTEMPTS:
         # The tail has failed often enough that every relaunch re-running it
