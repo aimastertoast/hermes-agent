@@ -18,10 +18,15 @@ The repair meant to fix the install was the thing that broke it.
 
 Upstream already exempts the Desktop's recovery diagnostic (``gateway status``) from the
 inline tail for exactly this reason. These are the rest of the Desktop's own commands:
-the backend boot, the owner restart, the read-only pre-update config read, and the
-read-only verifications the update hand-off runs. The tail belongs to ``hermes update``:
-a Desktop-spawned command leaves it owed, and the launch says so where an operator will
-read it.
+the backend boot, the owner restart, the gateway stop the update runs first, the
+read-only pre-update config read, the read-only verifications the update hand-off runs,
+the update check, and the state.db pre-flight snapshot. The tail belongs to ``hermes
+update``: a Desktop-spawned command leaves it owed, and the launch says so where an
+operator will read it.
+
+Two of those are the update's own front door: the pre-flight snapshot runs the tail with a
+30 second timeout, so an inline tail cancels the update it was meant to protect, and the
+pre-update gateway stop takes the update lock the update itself is about to take.
 """
 
 from __future__ import annotations
@@ -32,9 +37,13 @@ from __future__ import annotations
 _OWNS_TAIL_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("gateway", "ensure"),
     ("gateway", "restart"),
+    ("gateway", "stop"),
     ("config", "get"),
     ("hermes_cli.desktop_update_verify",),
     ("hermes_cli.update_verification",),
+    ("hermes_cli.source_check",),
+    ("hermes_cli.source_check_fork",),
+    ("hermes_cli.backup_sqlite",),
 )
 
 

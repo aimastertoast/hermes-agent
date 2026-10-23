@@ -23,9 +23,13 @@ from hermes_cli.update_desktop_tail import desktop_owes_tail
         ["gateway", "ensure"],
         ["gateway", "ensure", "--json"],
         ["gateway", "restart"],
+        ["gateway", "stop", "--all"],
         ["config", "get", "updates.pre_update_backup", "--json"],
         ["hermes_cli.desktop_update_verify"],
         ["hermes_cli.update_verification"],
+        ["hermes_cli.source_check"],
+        ["hermes_cli.source_check_fork"],
+        ["hermes_cli.backup_sqlite"],
     ],
 )
 def test_desktop_commands_own_the_tail(command: list[str]) -> None:
@@ -79,6 +83,30 @@ def test_desktop_backend_boot_leaves_the_tail_owed(tmp_path, monkeypatch, capsys
     assert ran == [], "the Desktop's backend boot ran the completion tail inline"
     assert "a source update is unfinished" in capsys.readouterr().err
     assert venv_sync.completion_pending_path(root).is_file(), "the tail was dropped instead of owed"
+
+
+def test_the_desktops_pre_update_snapshot_leaves_the_tail_owed(tmp_path, monkeypatch) -> None:
+    """The state.db pre-flight runs the tail with a 30s timeout: an inline tail cancels
+    the update it was supposed to protect."""
+    root = _owing_checkout(tmp_path, monkeypatch)
+    ran: list[tuple] = []
+    monkeypatch.setattr(venv_sync, "_finish_source_update", lambda *a, **k: ran.append(a))
+
+    venv_sync.prepare_launch(root, ["--run-module", "hermes_cli.backup_sqlite", str(tmp_path / "home")])
+
+    assert ran == [], "the pre-update snapshot ran the completion tail inline"
+
+
+def test_the_desktops_pre_update_gateway_stop_leaves_the_tail_owed(tmp_path, monkeypatch) -> None:
+    """``gateway stop --all`` runs before the update: an inline tail there holds the
+    update lock the update itself is about to take."""
+    root = _owing_checkout(tmp_path, monkeypatch)
+    ran: list[tuple] = []
+    monkeypatch.setattr(venv_sync, "_finish_source_update", lambda *a, **k: ran.append(a))
+
+    venv_sync.prepare_launch(root, ["gateway", "stop", "--all"])
+
+    assert ran == [], "the pre-update gateway stop ran the completion tail inline"
 
 
 def test_an_ordinary_command_still_runs_the_tail(tmp_path, monkeypatch) -> None:
