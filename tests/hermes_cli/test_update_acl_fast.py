@@ -7,8 +7,9 @@ the directories created since -- a directory is the only thing that can break th
 again, and the files inside it are fixed along with it.
 
 These tests pin the guarantee the incremental pass rests on: a directory created before the
-stamp (and its whole subtree) is skipped, a directory created after it is repaired, and a
-repair that did not finish leaves no stamp behind.
+stamp is skipped, a directory created after it is repaired -- also when it sits inside an
+old directory, which is where the update actually creates them -- and a repair that did
+not finish leaves no stamp behind.
 """
 
 from __future__ import annotations
@@ -59,7 +60,21 @@ def test_a_directory_created_before_the_stamp_is_not_visited(tmp_path: Path) -> 
 
     visited = set(_iter_new_dirs(home, time.time() + 1))
 
-    assert visited == {home}
+    assert visited == set()
+
+
+def test_a_new_directory_inside_an_old_one_is_visited(tmp_path: Path) -> None:
+    """The update creates directories inside old ones (profiles/<id>/sessions/<day>).
+    The old parent was repaired, but the new child inside it is the broken one."""
+    home = tmp_path / "home"
+    (home / "old").mkdir(parents=True)
+    since = time.time()
+    time.sleep(0.05)
+    (home / "old" / "new").mkdir()
+
+    visited = set(_iter_new_dirs(home, since))
+
+    assert visited == {home / "old" / "new"}
 
 
 def test_a_directory_created_after_the_stamp_is_visited(tmp_path: Path) -> None:
@@ -69,7 +84,7 @@ def test_a_directory_created_after_the_stamp_is_visited(tmp_path: Path) -> None:
 
     visited = set(_iter_new_dirs(home, 0))
 
-    assert visited == {home, home / "new", home / "new" / "deeper"}
+    assert visited == {home / "new", home / "new" / "deeper"}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="a Windows junction")
@@ -104,7 +119,7 @@ def test_the_incremental_repair_grants_only_the_directories_created_since_the_st
 
     assert repair_home_acl(elevated=True) is True
 
-    assert granted == [home], "the repair touched a directory the last repair had already fixed"
+    assert granted == [], "the repair touched a directory the last repair had already fixed"
 
 
 def test_the_incremental_repair_repairs_a_directory_created_after_the_stamp(
@@ -113,8 +128,11 @@ def test_the_incremental_repair_repairs_a_directory_created_after_the_stamp(
     import hermes_dir_acl
 
     home = tmp_path / "home"
-    (home / "new").mkdir(parents=True)
-    write_stamp(home, 0)
+    (home / "old").mkdir(parents=True)
+    since = time.time()
+    time.sleep(0.05)
+    (home / "old" / "new").mkdir()
+    write_stamp(home, since)
     granted: list[Path] = []
     monkeypatch.setattr(hermes_dir_acl, "grant_user_access",
                         lambda path, **kwargs: granted.append(Path(path)) or True)
@@ -123,7 +141,7 @@ def test_the_incremental_repair_repairs_a_directory_created_after_the_stamp(
 
     assert repair_home_acl(elevated=True) is True
 
-    assert home / "new" in granted
+    assert granted == [home / "old" / "new"], "the new directory inside the old one was missed"
 
 
 def test_a_tree_that_was_never_repaired_gets_the_full_repair(tmp_path: Path, monkeypatch) -> None:

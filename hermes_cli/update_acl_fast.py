@@ -17,6 +17,9 @@ This module gives the same guarantee for a fraction of the cost:
   break again: an elevated ``os.mkdir(path, 0o700)`` applies a protected DACL of
   SYSTEM/Administrators/OWNER RIGHTS (CPython 3.13+), and everything created inside it
   inherits that broken DACL -- which the directory's own repair fixes along with it.
+* The later repair still WALKS every directory (117,733 of them, 18 s): a directory created
+  before the stamp can receive a new one after it, and only the new one is broken. What it
+  does not do is re-grant the million entries that are already healthy.
 
 The stamp lives in ``<home>/.acl-repair-stamp.json`` and holds the time the repair STARTED,
 so an entry created while a repair runs is newer than the stamp and the next run still sees
@@ -65,16 +68,17 @@ def write_stamp(home: str | Path, when: float) -> None:
 
 
 def _iter_new_dirs(root: Path, since: float) -> Iterator[Path]:
-    """Yield *root* and every directory under it created after *since* (epoch seconds).
+    """Yield every directory under *root* created after *since* (epoch seconds).
 
-    A directory created at or before *since* was repaired then, and the entries created
-    inside it inherit its inheritable user ACE, so its whole subtree is skipped. A reparse
-    point is never entered: an elevated grant must not follow a link out of the home.
+    The walk visits EVERY directory, not only the new ones: a directory that was created
+    before the stamp can still receive a new one afterwards (the update creates
+    ``<home>/profiles/<id>/sessions/<day>``), and the new one is the broken one -- so
+    pruning the walk at the old directories would miss it. A reparse point is never
+    entered: an elevated grant must not follow a link out of the home.
     """
     stack = [Path(root)]
     while stack:
         directory = stack.pop()
-        yield directory
         try:
             with os.scandir(directory) as entries:
                 children = list(entries)
@@ -89,9 +93,10 @@ def _iter_new_dirs(root: Path, since: float) -> Iterator[Path]:
                 continue
             if getattr(info, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT:
                 continue
-            if info.st_ctime <= since:
-                continue  # created before the last repair: healthy, and so is its subtree
-            stack.append(Path(entry.path))
+            child = Path(entry.path)
+            if info.st_ctime > since:
+                yield child
+            stack.append(child)
 
 
 def _full_repair(home: Path) -> None:
