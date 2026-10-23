@@ -66,7 +66,6 @@ docker/entrypoint.sh text eol=lf
 /apps/desktop/src/app/settings/model-settings.test.tsx merge=union
 /apps/desktop/src/app/settings/model-settings.tsx merge=union
 /apps/desktop/src/app/settings/profile-scope.test.tsx merge=union
-/apps/desktop/src/components/update-status.tsx merge=union
 /apps/desktop/src/global.d.ts merge=union
 /apps/desktop/src/plugins/hermes-bots/group-external-writes.test.ts merge=union
 /apps/desktop/src/plugins/hermes-bots/routing.ts merge=union

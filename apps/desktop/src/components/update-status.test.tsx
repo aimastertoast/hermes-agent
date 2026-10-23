@@ -6,7 +6,8 @@ import { I18nProvider, type Locale, TRANSLATIONS, type Translations } from '@/i1
 import { en } from '@/i18n/en'
 import type { UpdateApplyState } from '@/store/updates'
 
-import { deriveUpdateStatus, deriveUpdateStatusFromReceipt, VersionHero } from './update-status'
+import { deriveUpdateStatusFromReceipt } from './update-receipt-status'
+import { deriveUpdateStatus, VersionHero } from './update-status'
 
 // VersionHero is the shared About/overlay hero. Its module imports the real
 // updates store graph; mock it shallowly — these tests exercise the hero's

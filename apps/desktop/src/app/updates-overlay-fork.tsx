@@ -29,7 +29,7 @@ import {
   preventCloseButtonAutoFocus
 } from '@/components/ui/dialog'
 import { ErrorIcon } from '@/components/ui/error-state'
-import { deriveUpdateStatusFromReceipt } from '@/components/update-status'
+import { deriveUpdateStatusFromReceipt } from '@/components/update-receipt-status'
 import { useI18n } from '@/i18n'
 import { $lastReceipt } from '@/store/update-receipt-fork'
 import {
