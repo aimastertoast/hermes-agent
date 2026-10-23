@@ -20,6 +20,13 @@ def repair_windows_home_acl(*, elevated: bool | None = None) -> None:
 
     *elevated* is the host fact (default: probed; False on every host but an elevated Windows one).
     """
+    # FORK: the incremental repair (hermes_cli/update_acl_fast.py) does the same work for a
+    # fraction of the cost: upstream's body below walks and grants EVERY entry under the home
+    # (1,020,881 entries, 22 minutes on this install) to re-grant an ACE that is already there.
+    from hermes_cli.update_acl_fast import repair_home_acl
+
+    if repair_home_acl(elevated=elevated):
+        return
     from hermes_dir_acl import grant_tree_user_access, process_is_elevated
     if not (process_is_elevated() if elevated is None else elevated):
         # Only an elevated update leaves Administrators-only entries, and only an elevated token

@@ -92,6 +92,14 @@ VENV_SYNC_TARGET = "hermes_cli/venv_sync.py"
 VENV_SYNC_MAX_ADDED = 8
 VENV_SYNC_MAX_DELETED = 0
 
+# ``hermes_cli/update_windows_acl.py`` is upstream's ACL-repair step, and the fork's
+# incremental repair (fork-owned module, one call site) replaces the whole-tree walk that
+# cost 22 minutes of every update. The delta is a pure insertion, so a routine upstream
+# edit next to it merges cleanly, and the budget keeps it that way.
+ACL_TARGET = "hermes_cli/update_windows_acl.py"
+ACL_MAX_ADDED = 8
+ACL_MAX_DELETED = 0
+
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
 # update_cmd.py is NOT listed ``merge=union`` (see .gitattributes for the measured reason:
@@ -479,6 +487,31 @@ def test_venv_sync_fork_delta_stays_within_budget() -> None:
     )
 
 
+def test_acl_step_fork_delta_stays_within_budget() -> None:
+    """The ACL step's fork delta must stay a pure insertion of ONE call site.
+
+    ``hermes_cli/update_windows_acl.py`` is upstream's, and it is the step that decides
+    whether the user keeps access to the Hermes home. The fork's part is the incremental
+    repair (fork-owned module, one call): the decision itself must never come back here,
+    because a rewritten block in this file is a hunk upstream has to collide with -- and a
+    collision aborts ``hermes update`` with exit 1.
+    """
+    delta = _fork_delta(ACL_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= ACL_MAX_DELETED, (
+        f"{ACL_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file (budget "
+        f"{ACL_MAX_DELETED}). Every deleted line is a line upstream has to restore in the "
+        f"same hunk to collide. Move the fork's change into a fork-owned module."
+    )
+    assert added <= ACL_MAX_ADDED, (
+        f"{ACL_TARGET}: the fork now ADDS {added} line(s) to upstream's file (budget "
+        f"{ACL_MAX_ADDED}). Keep the repair in hermes_cli/update_acl_fast.py and leave the "
+        f"one call site behind."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
@@ -488,8 +521,10 @@ def test_fork_modules_exist() -> None:
         "hermes_cli/update_receipt_fork.py",
         "hermes_cli/source_check_fork.py",
         "hermes_cli/update_desktop_tail.py",
+        "hermes_cli/update_acl_fast.py",
         "tests/hermes_cli/test_source_check_fork.py",
         "tests/hermes_cli/test_update_desktop_tail.py",
+        "tests/hermes_cli/test_update_acl_fast.py",
         "hermes_cli/tests/update/test_update_receipt_legacy.py",
         "apps/desktop/src/app/updates-overlay-fork.tsx",
         "apps/desktop/src/app/updates-overlay-fork.test.tsx",
