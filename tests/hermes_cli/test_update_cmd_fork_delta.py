@@ -195,6 +195,16 @@ COMMAND_TOKEN_SOURCE_TARGET = "agent/command_token_source.py"
 COMMAND_TOKEN_SOURCE_MAX_ADDED = 5
 COMMAND_TOKEN_SOURCE_MAX_DELETED = 0
 
+# ``apps/desktop/src/components/update-status.test.tsx`` is upstream's own test
+# for the VersionHero banner. The fork's receipt-status tests used to sit in it
+# -- an 88-line delta on an upstream file, so upstream's edits to that file
+# collided with the fork's block. They cover ``update-receipt-status.ts``, a
+# FORK-OWNED module, so they moved to ``update-receipt-status-fork.test.tsx``
+# and the upstream file is byte-identical again.
+UPDATE_STATUS_TEST_TARGET = "apps/desktop/src/components/update-status.test.tsx"
+UPDATE_STATUS_TEST_MAX_ADDED = 0
+UPDATE_STATUS_TEST_MAX_DELETED = 0
+
 # The files the fork migrated to a pure insertion in one batch. Each of them used to
 # DELETE a line of upstream's file -- a conflict magnet -- and now only adds lines.
 #
@@ -823,6 +833,24 @@ def test_command_token_source_fork_delta_is_a_pure_insertion() -> None:
     )
 
 
+def test_update_status_test_file_is_byte_identical_to_upstream() -> None:
+    """The fork's receipt-status tests must stay out of upstream's test file.
+
+    The fork's block sat at the end of upstream's ``update-status.test.tsx``, so
+    every upstream edit to that file had to collide with it. The tests cover a
+    fork-owned module and belong in a fork-owned file.
+    """
+    delta = _fork_delta(UPDATE_STATUS_TEST_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert (added, deleted) == (0, 0), (
+        f"{UPDATE_STATUS_TEST_TARGET}: the fork's delta is {added} added / {deleted} "
+        "deleted line(s) of upstream's file. The receipt-status tests belong in "
+        "apps/desktop/src/components/update-receipt-status-fork.test.tsx."
+    )
+
+
 # The migrated files and where their fork code belongs when the delta grows again.
 _MIGRATED_DELTA_BUDGETS = (
     (BANNER_TARGET, BANNER_MAX_ADDED, BANNER_MAX_DELETED,
@@ -907,5 +935,6 @@ def test_fork_modules_exist() -> None:
         "apps/desktop/electron/updater/checkout-source-fork.test.ts",
         "apps/desktop/src/app/hooks/use-config-record-fork.ts",
         "apps/desktop/src/app/hooks/use-config-record-fork.test.tsx",
+        "apps/desktop/src/components/update-receipt-status-fork.test.tsx",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
