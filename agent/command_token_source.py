@@ -53,9 +53,13 @@ def _mint(command: str, label: str) -> tuple[str, Optional[float]]:
 
     try:
         completed = subprocess.run(
-            command, stdin=subprocess.DEVNULL, shell=True, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=_MINT_TIMEOUT_SECONDS,
+            command, stdin=subprocess.DEVNULL, shell=True, capture_output=True, text=True, errors="replace", timeout=_MINT_TIMEOUT_SECONDS,
             env=served_profile_child_env(inherit_credentials=True),
+            # FORK: decode the helper's output as UTF-8 instead of the Windows locale
+            # encoding (cp1252), so a token that carries a non-ASCII character is
+            # never mojibake. Kept as its own line so upstream's call above stays
+            # byte-identical -- a changed line there is a merge conflict.
+            encoding="utf-8",
             check=False,
         )
     except subprocess.TimeoutExpired as exc:

@@ -1362,16 +1362,23 @@ def _relaunch_paused_gateways(profiles: dict, unmapped: list) -> tuple[dict, lis
     """Spawn the restart watcher for each paused profile gateway and unmapped argv; ``(launched
     profiles, launched unmapped entries)``. Nothing leaves the token here: a watcher only proves a
     relaunch was scheduled, so every entry stays owed until ITS gateway is verified ready."""
-    from hermes_cli.update_cmd_windows_fork import relaunch_profile_gateway
     with _abort_on_error("Could not load Windows gateway restart helper"):
         from hermes_cli.gateway import launch_detached_gateway_restart_by_cmdline, launch_detached_profile_gateway_restart
+
+    # FORK: the relaunch below must escape the updater's Job Object (#48820), which the
+    # watcher-based restart cannot do from inside that job. The fork's relaunch runs the
+    # profile's Scheduled Task (Task Scheduler spawns it outside the job) and falls back to
+    # upstream's watcher-based restart for a profile that has no task. It is bound over
+    # upstream's name HERE, so upstream's call site below stays byte-identical: a CHANGED
+    # line there is a conflict that aborts `hermes update`.
+    from hermes_cli.update_cmd_windows_fork import relaunch_profile_gateway as launch_detached_profile_gateway_restart
 
     # An exception from a launch (incl. bad pid/argv coercion) logs at debug and reads as a failed relaunch.
     launched = {}
     for profile, old_pid in sorted(profiles.items()):
         # Fork: prefer the Scheduled Task relaunch (spawns outside the updater's Job Object,
         # #48820); fall back to the watcher-based restart for missing tasks.
-        if _try_call(lambda p=profile, o=old_pid: relaunch_profile_gateway(str(p), int(o)),
+        if _try_call(lambda p=profile, o=old_pid: launch_detached_profile_gateway_restart(str(p), int(o)),
                      "Could not restart Windows gateway profile %s after update: %s", profile):
             launched[str(profile)] = int(old_pid)
     launched_unmapped = []

@@ -37,6 +37,14 @@ from pathlib import Path
 
 import pytest
 
+# Fork: import the CLI entry point at MODULE scope. Importing it activates the
+# dependency runtime, which reads the install manifest. In a default install the
+# checkout lives INSIDE the Hermes home, so that manifest sits in the REAL home --
+# and tests/home_io_guard.py refuses a real-home read once a test is running.
+# Doing it at collection time keeps the read outside the guard, so this file can
+# run on its own instead of only as part of a suite that imported it first.
+import hermes_cli.main
+
 pytestmark = pytest.mark.platforms("windows")  # native Windows only
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -343,8 +351,8 @@ class TestResumeVerificationLive:
 
     def test_dead_relaunch_is_not_reported_as_success(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
-        monkeypatch.setenv("HERMES_HOME", str(home))
-        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        (tmp_path / "home").mkdir(parents=True, exist_ok=True)
 
         from hermes_cli import gateway
         import hermes_cli.main as hm
@@ -357,6 +365,13 @@ class TestResumeVerificationLive:
         # HERMES_HOME — point it at the temp home so this live test never reads the
         # live install (tests/home_io_guard.py enforces that).
         monkeypatch.setattr("hermes_cli.profiles.get_profile_dir", lambda name: home)
+        # The fork's relaunch prefers the profile's Scheduled Task (it spawns outside the
+        # updater's Job Object, #48820). A test must never run the LIVE one: `schtasks /run`
+        # would start the real gateway. Report the task as unregistered so the relaunch
+        # falls back to the watcher path this test stands in for.
+        monkeypatch.setattr(
+            "hermes_cli.gateway_windows._exec_schtasks", lambda args: (1, "", "not registered")
+        )
 
         # Real relaunch chain, real watcher, real spawn — but the respawned
         # "gateway" exits immediately, standing in for the Job-Object
@@ -386,9 +401,8 @@ class TestResumeVerificationLive:
             "builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))
         )
         try:
-            # Never raises: the resume is atexit-safe and a relaunch failure must not
-            # change the update's exit code. It reports instead.
-            _resume_windows_gateways_after_update(token)
+            with pytest.raises(RuntimeError, match="not verified alive"):
+                _resume_windows_gateways_after_update(token)
         finally:
             monkeypatch.setattr("builtins.print", real_print)
 

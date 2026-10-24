@@ -58,6 +58,7 @@ docker/entrypoint.sh text eol=lf
 # Files whose fork delta modifies upstream lines are deliberately ABSENT: they keep
 # the loud conflict, which is the only safe outcome for a genuine overlap.
 /.gitignore merge=union
+/agent/command_token_source.py merge=union
 /apps/desktop/electron/main.ts merge=union
 /apps/desktop/electron/preload.ts merge=union
 /apps/desktop/src/api/client.ts merge=union
@@ -88,6 +89,7 @@ docker/entrypoint.sh text eol=lf
 /hermes_cli/web_server.py merge=union
 /scripts/desktop-update/windows.ps1 merge=union
 /tests/gateway/test_gateway_command_line_matcher.py merge=union
+/tests/hermes_cli/test_gateway_job_teardown_live.py merge=union
 /tests/hermes_cli/test_source_channel_integration.py merge=union
 /tests/hermes_cli/test_update_contract.py merge=union
 /tests/tools/test_mcp_tool.py merge=union
@@ -119,3 +121,8 @@ docker/entrypoint.sh text eol=lf
 #   argv becomes a broken desktop build instead of a loud conflict.
 # * ``apps/desktop/src/plugins/hermes-bots/group-external-writes.ts`` -- the one remaining
 #   deletion is upstream's multi-line call, whose argument genuinely changed.
+# * ``hermes_cli/update_cmd_windows.py`` -- the fork's delta is a pure insertion (the fork's
+#   relaunch is bound over upstream's local name, so upstream's call line is byte-identical),
+#   but the binding only takes effect while upstream's lambda still calls that name. An
+#   upstream RENAME would leave the fork's Scheduled-Task relaunch bound to a name nobody
+#   calls -- the #48820 teardown kill would silently return. A loud conflict is better.

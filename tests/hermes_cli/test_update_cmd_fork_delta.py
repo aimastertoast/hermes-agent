@@ -124,13 +124,22 @@ ACL_MAX_DELETED = 0
 # ``hermes_cli/update_cmd_windows.py`` is upstream's Windows gateway-lifecycle
 # module. The fork's part (the Scheduled-Task relaunch, which spawns outside the
 # updater's Job Object, and the post-update gate) lives in the fork-owned
-# ``hermes_cli/update_cmd_windows_fork.py``; only the delegation and the fork's
-# comment stay in the upstream file. The ONE remaining deletion is upstream's
-# original call line, whose TARGET genuinely changed -- a real overlap, so this
-# file is deliberately NOT union-listed and must keep its loud conflict.
+# ``hermes_cli/update_cmd_windows_fork.py``.
+#
+# The fork's delegation used to REPLACE upstream's call line -- one deleted line,
+# one conflict magnet. It is now a pure insertion: the fork's relaunch is bound
+# over upstream's local name right above the call, so upstream's line stays
+# byte-identical and the call resolves to the fork's function.
+#
+# The file is deliberately NOT union-listed. The fork's insertion only takes
+# effect while upstream's lambda still calls that name: an upstream RENAME would
+# leave the fork's fix bound to a name nobody calls -- the Scheduled-Task
+# relaunch would silently stop applying and the #48820 teardown kill would
+# return. A loud conflict is the better outcome, exactly like
+# ``apps/desktop/electron/updater/checkout-source.ts``.
 UPDATE_CMD_WINDOWS_TARGET = "hermes_cli/update_cmd_windows.py"
-UPDATE_CMD_WINDOWS_MAX_ADDED = 4
-UPDATE_CMD_WINDOWS_MAX_DELETED = 1
+UPDATE_CMD_WINDOWS_MAX_ADDED = 10
+UPDATE_CMD_WINDOWS_MAX_DELETED = 0
 
 # ``.gitignore`` must stay a PURE INSERTION. The fork's only rule that upstream
 # does not have is ``qa-reports/``. The fork once dropped upstream's whole
@@ -142,6 +151,49 @@ UPDATE_CMD_WINDOWS_MAX_DELETED = 1
 GITIGNORE_TARGET = ".gitignore"
 GITIGNORE_MAX_ADDED = 3
 GITIGNORE_MAX_DELETED = 0
+
+# The live gateway-teardown test must stay a PURE INSERTION of upstream's file.
+#
+# The fork's delta here used to REPLACE upstream's ``with pytest.raises(RuntimeError,
+# match="not verified alive")`` block with a plain call, on the claim that the resume
+# "never raises". It does raise -- ``_verify_relaunched_gateways_alive`` ends in
+# ``raise RuntimeError("... not verified alive: ...")`` and ``_resume_paused_set``
+# re-raises it -- so the fork's own test asserted the opposite of the code and only
+# went unnoticed because the test could not even run in this checkout (the bootstrap's
+# install-manifest read trips tests/home_io_guard.py once a test is running).
+#
+# Upstream's expectation is the correct one, so it is back. What remains are the
+# fork's environment adaptations, all insertions:
+#   * ``get_profile_dir`` points at the temp home, so the liveness poll never reads
+#     the live install ("default" resolves to the REAL home regardless of HERMES_HOME);
+#   * ``_exec_schtasks`` reports the Scheduled Task as unregistered, so the test never
+#     runs ``schtasks /run`` against the live task (the fork's relaunch prefers it);
+#   * the module-scope ``import hermes_cli.main`` does the bootstrap's manifest read at
+#     collection time, outside the guard, so the file runs on its own;
+#   * the dead profile stays on the token, so reconciliation still surfaces it.
+GATEWAY_TEARDOWN_LIVE_TEST_TARGET = "tests/hermes_cli/test_gateway_job_teardown_live.py"
+GATEWAY_TEARDOWN_LIVE_TEST_MAX_ADDED = 23
+GATEWAY_TEARDOWN_LIVE_TEST_MAX_DELETED = 0
+
+# ``agent/command_token_source.py`` mints a provider key by running a helper
+# command. The fork decodes the helper's output as UTF-8 instead of the Windows
+# locale encoding (cp1252), so a token that carries a non-ASCII character is not
+# mojibake -- upstream's own ``test_undecodable_output_does_not_raise`` only
+# asserts the token's PREFIX, so the decode was never pinned.
+#
+# The fork's fix used to REWRAP upstream's ``subprocess.run`` call: one deleted
+# line, one conflict magnet. It is now a pure insertion -- upstream's argument
+# line is byte-identical and the fork's ``encoding="utf-8"`` is its own keyword
+# argument. Upstream rewrites this call often (10 commits since 2026-09-01,
+# several of them lint fixes to the very same call), so the file IS union-listed:
+# the union of upstream's rewritten argument list and the fork's block was
+# checked to parse, with exactly one ``encoding=`` keyword, in both the
+# "upstream splits the argument line" and the "upstream adds its own encoding"
+# variants. The behaviour is pinned by the fork-owned
+# ``tests/agent/test_command_token_source_fork.py``.
+COMMAND_TOKEN_SOURCE_TARGET = "agent/command_token_source.py"
+COMMAND_TOKEN_SOURCE_MAX_ADDED = 5
+COMMAND_TOKEN_SOURCE_MAX_DELETED = 0
 
 # The files the fork migrated to a pure insertion in one batch. Each of them used to
 # DELETE a line of upstream's file -- a conflict magnet -- and now only adds lines.
@@ -676,7 +728,9 @@ def test_update_cmd_windows_fork_delta_stays_within_budget() -> None:
 
     ``hermes_cli/update_cmd_windows.py`` is upstream's, and the fork's
     Scheduled-Task relaunch plus its post-update gate live in the fork-owned
-    ``hermes_cli/update_cmd_windows_fork.py``. Only the delegation stays here.
+    ``hermes_cli/update_cmd_windows_fork.py``. Only the delegation stays here --
+    and it is a pure insertion: the fork's relaunch is bound over upstream's local
+    name, so upstream's call line stays byte-identical.
     """
     delta = _fork_delta(UPDATE_CMD_WINDOWS_TARGET)
     if delta is None:
@@ -684,8 +738,8 @@ def test_update_cmd_windows_fork_delta_stays_within_budget() -> None:
     added, deleted = delta
     assert deleted <= UPDATE_CMD_WINDOWS_MAX_DELETED, (
         f"{UPDATE_CMD_WINDOWS_TARGET}: the fork now DELETES {deleted} line(s) of upstream's "
-        f"file (budget {UPDATE_CMD_WINDOWS_MAX_DELETED}). Move the fork's change into "
-        f"hermes_cli/update_cmd_windows_fork.py."
+        f"file (budget {UPDATE_CMD_WINDOWS_MAX_DELETED}). Bind the fork's relaunch over "
+        "upstream's name instead of changing its call line."
     )
     assert added <= UPDATE_CMD_WINDOWS_MAX_ADDED, (
         f"{UPDATE_CMD_WINDOWS_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
@@ -715,6 +769,57 @@ def test_gitignore_fork_delta_stays_within_budget() -> None:
         f"{GITIGNORE_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
         f"(budget {GITIGNORE_MAX_ADDED}). Upstream's patterns already cover the build caches; "
         f"only a genuinely fork-specific rule belongs here."
+    )
+
+
+def test_gateway_teardown_live_test_fork_delta_is_a_pure_insertion() -> None:
+    """The live teardown test must keep upstream's lines and only add its own.
+
+    The fork's delta here was a REPLACEMENT of upstream's ``pytest.raises`` block:
+    it deleted upstream's lines and asserted the opposite behavior. A deleted line
+    is a line upstream has to restore in the same hunk to collide -- and the conflict
+    aborts ``hermes update`` (the Desktop's "Update failed (exit 1)" banner).
+    """
+    delta = _fork_delta(GATEWAY_TEARDOWN_LIVE_TEST_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= GATEWAY_TEARDOWN_LIVE_TEST_MAX_DELETED, (
+        f"{GATEWAY_TEARDOWN_LIVE_TEST_TARGET}: the fork now DELETES {deleted} line(s) of "
+        f"upstream's file (budget {GATEWAY_TEARDOWN_LIVE_TEST_MAX_DELETED}). Upstream's "
+        "``pytest.raises`` block is the correct expectation -- the resume DOES raise "
+        "\"not verified alive\" -- so it must stay byte-identical. Keep the fork's "
+        "adaptations as insertions."
+    )
+    assert added <= GATEWAY_TEARDOWN_LIVE_TEST_MAX_ADDED, (
+        f"{GATEWAY_TEARDOWN_LIVE_TEST_TARGET}: the fork now ADDS {added} line(s) to upstream's "
+        f"file (budget {GATEWAY_TEARDOWN_LIVE_TEST_MAX_ADDED}). Keep only the environment "
+        "adaptations (temp home, no live Scheduled Task, module-scope import)."
+    )
+
+
+def test_command_token_source_fork_delta_is_a_pure_insertion() -> None:
+    """The UTF-8 decode must be an added keyword argument, not a rewritten call.
+
+    The fork's fix used to re-wrap upstream's ``subprocess.run`` call, deleting
+    upstream's argument line. A deleted line is a line upstream has to restore in
+    the same hunk to collide -- and the conflict aborts ``hermes update`` (the
+    Desktop's "Update failed (exit 1)" banner).
+    """
+    delta = _fork_delta(COMMAND_TOKEN_SOURCE_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= COMMAND_TOKEN_SOURCE_MAX_DELETED, (
+        f"{COMMAND_TOKEN_SOURCE_TARGET}: the fork now DELETES {deleted} line(s) of "
+        f"upstream's file (budget {COMMAND_TOKEN_SOURCE_MAX_DELETED}). Upstream's "
+        "``subprocess.run`` argument line must stay byte-identical -- pass the fork's "
+        "``encoding=\"utf-8\"`` as its own keyword argument instead."
+    )
+    assert added <= COMMAND_TOKEN_SOURCE_MAX_ADDED, (
+        f"{COMMAND_TOKEN_SOURCE_TARGET}: the fork now ADDS {added} line(s) to upstream's "
+        f"file (budget {COMMAND_TOKEN_SOURCE_MAX_ADDED}). Keep only the decode keyword "
+        "and its comment."
     )
 
 
