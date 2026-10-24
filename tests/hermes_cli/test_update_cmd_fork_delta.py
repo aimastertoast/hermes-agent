@@ -141,15 +141,19 @@ UPDATE_CMD_WINDOWS_TARGET = "hermes_cli/update_cmd_windows.py"
 UPDATE_CMD_WINDOWS_MAX_ADDED = 10
 UPDATE_CMD_WINDOWS_MAX_DELETED = 0
 
-# ``.gitignore`` must stay a PURE INSERTION. The fork's only rule that upstream
-# does not have is ``qa-reports/``. The fork once dropped upstream's whole
-# build-cache block (``.build/``, ``.cache/``, ``/pm/.lock.json.lock``,
-# ``apps/desktop/.dist-build*``) in a commit whose message only announced
-# ``qa-reports/`` -- and untracked build debris then made the parked-branch
-# guard refuse every update. Restoring upstream's rules is the fix; the budget
-# keeps the fork from re-deleting them.
+# ``.gitignore`` must stay a PURE INSERTION. The fork's only rules that upstream
+# does not have are ``qa-reports/`` and ``%SystemDrive%/``. The fork once dropped
+# upstream's whole build-cache block (``.build/``, ``.cache/``,
+# ``/pm/.lock.json.lock``, ``apps/desktop/.dist-build*``) in a commit whose message
+# only announced ``qa-reports/`` -- and untracked build debris then made the
+# parked-branch guard refuse every update. Restoring upstream's rules is the fix;
+# the budget keeps the fork from re-deleting them.
+#
+# ``%SystemDrive%/`` is the same class of debris: a tool that passed the
+# UNEXPANDED ``%SystemDrive%`` to a Windows API wrote its cache tree into the
+# checkout root, and the untracked files hard-blocked the parked-branch guard.
 GITIGNORE_TARGET = ".gitignore"
-GITIGNORE_MAX_ADDED = 3
+GITIGNORE_MAX_ADDED = 8
 GITIGNORE_MAX_DELETED = 0
 
 # The live gateway-teardown test must stay a PURE INSERTION of upstream's file.

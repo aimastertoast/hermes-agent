@@ -328,3 +328,8 @@ apps/desktop/.dist-build*
 
 # Agent QA report debris (2026-09-20): untracked files hard-block the parked-branch update guard
 qa-reports/
+
+# Windows cache debris: a tool that passed the UNEXPANDED %SystemDrive% to a
+# Windows API wrote its cache tree into the checkout root. Untracked files
+# hard-block the parked-branch update guard.
+%SystemDrive%/
