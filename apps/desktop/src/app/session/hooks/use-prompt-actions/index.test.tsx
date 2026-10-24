@@ -4,7 +4,6 @@ import { act, cleanup, render, waitFor } from '@testing-library/react'
 import type { MutableRefObject } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { getLatestSessionMessages, getSession } from '@/hermes'
 import { en } from '@/i18n/en'
 import { textPart } from '@/lib/chat-messages'
@@ -299,14 +298,7 @@ describe('submit timeout admission fences', () => {
     await actRender(<Harness onReady={h => (handle = h)} rawAdmissionReceipts refreshSessions={async () => undefined} requestGateway={requestGateway} />)
     expect(await handle!.submitText('safe identified retry', { submission_id: 'identified-timeout' })).toBe(true)
     expect(submits.map(p => p.submission_id)).toEqual(['identified-timeout', 'identified-timeout'])
-    // The fork bounds the resume with SESSION_RESUME_REQUEST_TIMEOUT_MS —
-    // routing the session's MCP servers gates the reply and outruns the
-    // generic 30s default on a multi-server install.
-    expect(requestGateway).toHaveBeenCalledWith(
-      'session.resume',
-      expect.objectContaining({ session_id: RUNTIME_SESSION_ID }),
-      SESSION_RESUME_REQUEST_TIMEOUT_MS
-    )
+    expect(requestGateway).toHaveBeenCalledWith('session.resume', expect.objectContaining({ session_id: RUNTIME_SESSION_ID }))
   })
 })
 
@@ -2548,15 +2540,11 @@ describe('usePromptActions submit / queue drain semantics', () => {
     })
 
     expect(accepted).toBe(true)
-    expect(requestGateway).toHaveBeenCalledWith(
-      'session.resume',
-      {
-        session_id: 'stored-session-b',
-        source: 'desktop',
-        omit_messages: true
-      },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS
-    )
+    expect(requestGateway).toHaveBeenCalledWith('session.resume', {
+      session_id: 'stored-session-b',
+      source: 'desktop',
+      omit_messages: true
+    })
     expect(requestGateway).toHaveBeenCalledWith(
       'prompt.submit',
       {
@@ -2783,15 +2771,11 @@ describe('usePromptActions submit / queue drain semantics', () => {
 
     expect(accepted).toBe(true)
     // Must resume the correct stored session to get the right runtime id.
-    expect(requestGateway).toHaveBeenCalledWith(
-      'session.resume',
-      {
-        session_id: 'stored-session-a',
-        source: 'desktop',
-        omit_messages: true
-      },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS
-    )
+    expect(requestGateway).toHaveBeenCalledWith('session.resume', {
+      session_id: 'stored-session-a',
+      source: 'desktop',
+      omit_messages: true
+    })
     // The prompt must land in the resumed session, NOT the foreground.
     expect(requestGateway).toHaveBeenCalledWith(
       'prompt.submit',

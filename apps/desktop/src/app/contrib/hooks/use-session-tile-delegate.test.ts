@@ -1,7 +1,6 @@
 import { renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { reasoningEffortPending } from '@/app/chat/session-view'
 import type { ClientSessionState } from '@/app/types'
 import type * as HermesModule from '@/hermes'
@@ -117,7 +116,7 @@ describe('useSessionTileDelegate resumeTile', () => {
         profile: 'ai-engineer',
         omit_messages: true
       },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined,
       undefined
     )
     expect(requestGateway).not.toHaveBeenCalled()
@@ -145,7 +144,7 @@ describe('useSessionTileDelegate resumeTile', () => {
         profile: 'default',
         omit_messages: true
       },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined,
       undefined
     )
     expect(requestGateway).not.toHaveBeenCalled()
@@ -161,19 +160,12 @@ describe('useSessionTileDelegate resumeTile', () => {
     const runtimeId = await sessionTileDelegate()!.resumeTile('stored-shared')
 
     expect(runtimeId).toBe('runtime-shared')
-    expect(requestGatewayForAgent).toHaveBeenCalledWith(
-      'source-b',
-      'default',
-      'session.resume',
-      {
-        session_id: 'stored-shared',
-        cols: 96,
-        omit_messages: true,
-        profile: 'default'
-      },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS,
-      undefined
-    )
+    expect(requestGatewayForAgent).toHaveBeenCalledWith('source-b', 'default', 'session.resume', {
+      session_id: 'stored-shared',
+      cols: 96,
+      omit_messages: true,
+      profile: 'default'
+    })
     expect(ambientRequest).not.toHaveBeenCalled()
   })
 
@@ -197,19 +189,12 @@ describe('useSessionTileDelegate resumeTile', () => {
       connectionId: 'barry',
       profile: 'backend-oxcoder'
     })
-    expect(requestGatewayForAgent).toHaveBeenCalledWith(
-      'barry',
-      'oxcoder',
-      'session.resume',
-      {
-        session_id: 'stored-remote',
-        cols: 96,
-        omit_messages: true,
-        profile: 'backend-oxcoder'
-      },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS,
-      undefined
-    )
+    expect(requestGatewayForAgent).toHaveBeenCalledWith('barry', 'oxcoder', 'session.resume', {
+      session_id: 'stored-remote',
+      cols: 96,
+      omit_messages: true,
+      profile: 'backend-oxcoder'
+    })
     expect(ambientRequest).not.toHaveBeenCalled()
   })
 
@@ -271,15 +256,12 @@ describe('useSessionTileDelegate resumeTile', () => {
 
     await sessionTileDelegate()!.resumeTile('stored-tile', { authoritativeSnapshot: true })
 
-    // The fork bounds tile resumes with SESSION_RESUME_REQUEST_TIMEOUT_MS —
-    // routing the session's MCP servers gates the reply and outruns the
-    // generic 30s default on a multi-server install.
     expect(requestGatewayForAgent).toHaveBeenCalledWith('remote-tile', 'tile-profile', 'session.resume', {
       cols: 96,
       omit_messages: false,
       profile: 'backend-tile',
       session_id: 'stored-tile'
-    }, SESSION_RESUME_REQUEST_TIMEOUT_MS, undefined)
+    })
     expect(getLatestSessionMessages).not.toHaveBeenCalled()
     expect(states.current.get('runtime-tile')).toMatchObject({ busy: true, model: 'snapshot-model' })
     expect(JSON.stringify(states.current.get('runtime-tile')?.messages)).toContain('new answer')
@@ -597,7 +579,7 @@ describe('useSessionTileDelegate resumeTile', () => {
         profile: 'default',
         omit_messages: true
       },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined,
       undefined
     )
   })
@@ -939,7 +921,7 @@ describe('useSessionTileDelegate submitToSession', () => {
         omit_messages: true,
         profile: 'default'
       },
-      SESSION_RESUME_REQUEST_TIMEOUT_MS,
+      undefined,
       undefined
     )
     expect(routed).toHaveBeenNthCalledWith(

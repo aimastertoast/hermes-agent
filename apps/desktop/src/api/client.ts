@@ -51,6 +51,22 @@ export const PROMPT_SUBMIT_REQUEST_TIMEOUT_MS = 1_800_000
 // Continue button looking merely slow.
 export const SESSION_RESUME_REQUEST_TIMEOUT_MS = 300_000
 
+// The resume budget lives HERE, at the transport, and not at every call site.
+// The fork used to pass it explicitly at each `session.resume` call -- nine
+// upstream files, each of which upstream rewrites, so a routine upstream
+// merge conflicted and aborted `hermes update` (the GUI's "Update failed
+// (exit 1)" banner). One place is one line of fork delta in a file that is
+// already merge=union, and every resume gets the budget by construction.
+const METHOD_REQUEST_TIMEOUT_MS: Partial<Record<string, number>> = {
+  'session.resume': SESSION_RESUME_REQUEST_TIMEOUT_MS
+}
+
+/** The budget a request gets: the caller's own timeout, else the method's
+ *  budget, else the generic default (applied by `requestDeadline`). */
+export function gatewayRequestTimeout(method: string, timeoutMs: number | undefined): number | undefined {
+  return timeoutMs ?? METHOD_REQUEST_TIMEOUT_MS[method]
+}
+
 export const GATEWAY_NOT_CONNECTED_MESSAGE = 'Hermes gateway is not connected'
 
 // Canonical shared prompts (`gateway/session_pending_controls.py`) travel as
@@ -405,6 +421,19 @@ export class HermesGateway extends JsonRpcGatewayClient {
   }
 
   override async request<T>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+    // A method with its own budget (a resume) gets it here, at the transport,
+    // instead of at every call site: the fork used to pass it explicitly at
+    // each `session.resume` call -- nine upstream files, each of which
+    // upstream rewrites, so a routine upstream merge conflicted and aborted
+    // `hermes update` (the GUI's "Update failed (exit 1)" banner). Re-entering
+    // with the budget keeps the delta below a pure insertion and gives every
+    // resume the budget by construction.
+    if (timeoutMs === undefined) {
+      const budget = gatewayRequestTimeout(method, timeoutMs)
+
+      if (budget !== undefined) { return this.request<T>(method, params, budget, signal) }
+    }
+
     if (!this.canonical) { return super.request<T>(method, legacyParams(method, params), timeoutMs, signal) }
     const generation = this.connectionGeneration
     const deadline = requestDeadline(timeoutMs)

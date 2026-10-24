@@ -110,6 +110,14 @@ def test_union_list_covers_only_existing_files() -> None:
 # (exit 1)" banner). The fork's update strings therefore live in
 # ``apps/desktop/src/i18n/fork.ts`` (fork-owned), and the catalogs upstream
 # ships are byte-identical again.
+#
+# The resume-budget family below is the same story one layer down: the fork
+# passed ``SESSION_RESUME_REQUEST_TIMEOUT_MS`` at every ``session.resume``
+# call site, which put a fork delta on nine upstream files (plus six of their
+# tests). The budget now lives at the transport
+# (``apps/desktop/src/api/client.ts`` -> ``gatewayRequestTimeout``) and at the
+# bot door (``plugins/hermes-bots/routing.ts``), so every one of these files is
+# upstream's bytes again.
 MIGRATED_TO_FORK_OWNED = (
     "apps/desktop/src/i18n/en.ts",
     "apps/desktop/src/i18n/types.ts",
@@ -117,6 +125,22 @@ MIGRATED_TO_FORK_OWNED = (
     "apps/desktop/src/i18n/es.ts",
     "apps/desktop/src/i18n/de.ts",
     "apps/desktop/src/i18n/overlay-gaps.json",
+    # session-resume budget call sites (transport-level default instead)
+    "apps/desktop/src/app/session/hooks/use-session-actions/index.ts",
+    "apps/desktop/src/app/session/hooks/use-session-actions.test.tsx",
+    "apps/desktop/src/app/session/hooks/use-prompt-actions/submit.ts",
+    "apps/desktop/src/app/session/hooks/use-prompt-actions/utils.ts",
+    "apps/desktop/src/app/session/hooks/use-prompt-actions/utils.test.ts",
+    "apps/desktop/src/app/session/hooks/use-prompt-actions/index.test.tsx",
+    "apps/desktop/src/app/session/hooks/use-prompt-actions/resolve-target-session.ts",
+    "apps/desktop/src/app/session/hooks/use-prompt-actions/resolve-target-session.test.ts",
+    "apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.ts",
+    "apps/desktop/src/app/contrib/hooks/use-session-tile-delegate.test.ts",
+    # bot-mode resume budget call sites (one door instead of two)
+    "apps/desktop/src/plugins/hermes-bots/group-compress.ts",
+    "apps/desktop/src/plugins/hermes-bots/group-compress.test.tsx",
+    "apps/desktop/src/plugins/hermes-bots/group-turns.ts",
+    "apps/desktop/src/plugins/hermes-bots/group-test-utils.ts",
 )
 
 

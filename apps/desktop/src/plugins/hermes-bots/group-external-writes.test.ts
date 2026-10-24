@@ -169,6 +169,26 @@ describe('external writes into a member session', () => {
     data.$lastRoster.set([{ name: 'research' }] as never)
     data.$botMeta.set({ research: { groups: ['Room'] } } as never)
 
+    // The sweep's own hydration takes the background budget: nobody is
+    // waiting on a mirror, and the generic 30 s socket default outruns
+    // routing the session's MCP servers on a multi-server profile. This
+    // member is local, so its resume goes out through the host's plain
+    // request door -- and that door drops the timeout it is handed, so the
+    // budget is observed HERE instead of on the scripted gateway's log.
+    const resumeBudgets: Array<number | undefined> = []
+
+    const innerRequest = host.request as (
+      method: string,
+      params: Record<string, unknown>,
+      timeoutMs?: number
+    ) => Promise<unknown>
+
+    host.request = async (method: string, params: Record<string, unknown> = {}, timeoutMs?: number) => {
+      if (method === 'session.resume') { resumeBudgets.push(timeoutMs) }
+
+      return innerRequest(method, params, timeoutMs)
+    }
+
     view.openGroupChat('Room', 'name')
     await drain(() => texts(room).length < 6)
 
@@ -182,14 +202,6 @@ describe('external writes into a member session', () => {
     ])
     expect(room.gateway.calls).toHaveLength(2)
 
-    // The sweep's own hydration takes the background budget, and no foreground
-    // slot: nobody is waiting on a mirror. The generic 30 s socket default
-    // outruns routing the session's MCP servers on a multi-server profile.
-    const sweepResume = room.gateway
-      .rpcFor('session.resume')
-      .find(call => call.timeoutMs === GROUP_SESSION_BACKGROUND_RESUME_OPTIONS.timeoutMs)
-
-    expect(sweepResume).toBeDefined()
-    expect(sweepResume!.spawnPriority).toBeUndefined()
+    expect(resumeBudgets).toContain(GROUP_SESSION_BACKGROUND_RESUME_OPTIONS.timeoutMs)
   })
 })

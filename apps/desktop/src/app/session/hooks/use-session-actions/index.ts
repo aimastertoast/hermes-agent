@@ -3,7 +3,6 @@ import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router'
 
-import { SESSION_RESUME_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import {
   extendRefreshPageToOverlap,
@@ -1422,11 +1421,8 @@ export function useSessionActions({
       // its bounded retries into the "retries gave up" screen while the bot's
       // own backend is healthy one port over (#89206: local pool AND SSH).
       // requestForSessionProfile re-resolves the route at each call.
-      const requestForSession = <T>(
-        method: string,
-        params: Record<string, unknown> = {},
-        timeoutMs?: number
-      ): Promise<T> => requestForSessionProfile<T>(sessionOwner, requestGateway, method, params, timeoutMs)
+      const requestForSession = <T>(method: string, params: Record<string, unknown> = {}): Promise<T> =>
+        requestForSessionProfile<T>(sessionOwner, requestGateway, method, params)
 
       if (!isCurrentResume()) {
         return
@@ -2064,14 +2060,7 @@ export function useSessionActions({
           () =>
             requestForSession<SessionResumeResult>(
               'session.resume',
-              primaryResumeParams(storedSessionId, watchWindow, options?.authoritativeSnapshot, sessionProfile),
-              // The deferred build in primaryResumeParams is supposed to return
-              // the transcript before _make_agent finishes, but routing the
-              // session's MCP servers still gates the reply and outruns the
-              // generic 30s default on a multi-server install — rejecting a
-              // resume that then completed anyway. Bound it like prompt.submit
-              // rather than the default.
-              SESSION_RESUME_REQUEST_TIMEOUT_MS
+              primaryResumeParams(storedSessionId, watchWindow, options?.authoritativeSnapshot, sessionProfile)
             ),
           { requiresMessages: options?.authoritativeSnapshot, scope: sessionOwner }
         ).then(resumed => {

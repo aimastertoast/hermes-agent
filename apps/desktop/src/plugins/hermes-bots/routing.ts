@@ -237,6 +237,12 @@ export async function requestForBot<T = unknown>(
   options?: BotRequestOptions
 ): Promise<T> {
   const route = botConnectionRoute(bot)
+  // A group member resume routes the session's MCP servers before it answers,
+  // so the generic 30 s socket default outruns it on a multi-server profile.
+  // The budget lives HERE, at the one door every bot request goes through,
+  // instead of at the call sites -- a call-site timeout is a fork delta on a
+  // file upstream rewrites, and a conflict there aborts `hermes update`.
+  options = options ?? (method === 'session.resume' ? GROUP_SESSION_RESUME_OPTIONS : undefined)
 
   if (route) {
     if (typeof host.requestProfile !== 'function') {
