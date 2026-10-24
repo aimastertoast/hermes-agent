@@ -61,7 +61,14 @@ import { UpdatesOverlay as UpstreamUpdatesOverlay } from './updates-overlay'
  *  receipt. Long enough for the desktop backend to finish spawning. */
 const RECEIPT_HYDRATE_RETRY_MS = 2000
 
-export function UpdatesOverlay(props: ComponentProps<typeof UpstreamUpdatesOverlay>) {
+/** Upstream's overlay's own props. It takes none today, and
+ *  `ComponentProps` of a zero-argument component infers `unknown` -- so the
+ *  fork's overlay accepts upstream's props the moment upstream grows any, and
+ *  an empty record until then. The alias hides upstream's signature from the
+ *  app's call site, so this is where the contract is kept. */
+type UpstreamOverlayProps = ComponentProps<typeof UpstreamUpdatesOverlay>
+
+export function UpdatesOverlay(props: UpstreamOverlayProps extends object ? UpstreamOverlayProps : Record<string, never>) {
   const open = useStore($updateOverlayOpen)
   const target = useStore($updateOverlayTarget)
 
