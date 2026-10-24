@@ -45,11 +45,31 @@ DESKTOP_OVERLAY_TARGET = "apps/desktop/src/app/updates-overlay.tsx"
 DESKTOP_OVERLAY_MAX_ADDED = 0
 DESKTOP_OVERLAY_MAX_DELETED = 0
 
-# The fork's wiring points at the fork's overlay instead of upstream's. That
-# ONE import line is the only fork line left in an upstream-owned desktop file.
+# ``apps/desktop/src/app/contrib/wiring.tsx`` is upstream's app wiring -- the
+# file upstream rewrites most often (90 commits since 2026-09-01). The fork's
+# update overlay used to be wired in by EDITING the ``UpdatesOverlay`` import
+# there: ONE line, and the only fork line left in an upstream-owned desktop
+# file. A routine upstream edit in that import block turned it into a merge
+# conflict, which aborted ``hermes update`` ("Update failed (exit 1)").
+#
+# The fork's overlay is now resolved through a Vite alias
+# (``apps/desktop/vite.config.ts``), so this file is byte-identical to
+# upstream's again. ``apps/desktop/src/app/contrib/updates-overlay-resolution-fork.test.tsx``
+# pins that the alias still points at the fork's overlay: if the alias entry is
+# dropped, the fork's receipt pane silently stops rendering.
 DESKTOP_WIRING_TARGET = "apps/desktop/src/app/contrib/wiring.tsx"
-DESKTOP_WIRING_MAX_ADDED = 1
-DESKTOP_WIRING_MAX_DELETED = 1
+DESKTOP_WIRING_MAX_ADDED = 0
+DESKTOP_WIRING_MAX_DELETED = 0
+
+# The Vite alias that resolves the app's update overlay to the fork's. Upstream
+# rewrites ``apps/desktop/vite.config.ts`` as well, so the fork's entry must
+# stay a PURE INSERTION: the alias block is an object literal, and a
+# duplicated key in it is a TypeScript error (ts1117) rather than a silent
+# drop -- but a dropped alias is the quiet failure the resolution test above
+# exists to catch.
+VITE_CONFIG_TARGET = "apps/desktop/vite.config.ts"
+VITE_CONFIG_MAX_ADDED = 13
+VITE_CONFIG_MAX_DELETED = 0
 
 # ``apps/desktop/src/store/updates.ts`` is upstream's store. The fork's part
 # (the two update-settings atoms and the post-apply relaunch fix) lives in the
@@ -558,25 +578,43 @@ def test_desktop_update_overlay_fork_delta_stays_at_zero() -> None:
     )
 
 
-def test_desktop_wiring_fork_delta_stays_at_one_import() -> None:
-    """The wiring may point at the fork's overlay -- but only that one import.
+def test_desktop_wiring_fork_delta_stays_at_zero() -> None:
+    """``wiring.tsx`` must stay byte-identical to upstream's.
 
-    Every other line in ``wiring.tsx`` must stay upstream's: the file is
-    upstream's, and a fork line in it is a hunk upstream has to edit in the
-    same place to collide.
+    The fork's update overlay is resolved through the Vite alias in
+    ``apps/desktop/vite.config.ts``; the wiring itself must not carry a single
+    fork line, because the file is the one upstream rewrites most often.
     """
     delta = _fork_delta(DESKTOP_WIRING_TARGET)
     if delta is None:
         pytest.skip("no upstream ref to measure the fork's delta against")
     added, deleted = delta
-    assert deleted <= DESKTOP_WIRING_MAX_DELETED, (
-        f"{DESKTOP_WIRING_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
-        f"(budget {DESKTOP_WIRING_MAX_DELETED}). Only the overlay import may differ."
+    assert (added, deleted) == (0, 0), (
+        f"{DESKTOP_WIRING_TARGET}: the fork's delta is {added} added / {deleted} deleted "
+        "line(s) of upstream's file. The fork's overlay is resolved through the Vite "
+        "alias in apps/desktop/vite.config.ts -- do not edit the wiring."
     )
-    assert added <= DESKTOP_WIRING_MAX_ADDED, (
-        f"{DESKTOP_WIRING_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
-        f"(budget {DESKTOP_WIRING_MAX_ADDED}). Only the overlay import may differ -- move "
-        f"anything else into a fork-owned module."
+
+
+def test_vite_config_fork_delta_stays_a_pure_insertion() -> None:
+    """The Vite alias that mounts the fork's overlay must stay a pure insertion.
+
+    The alias block is an object literal: a duplicated key is a TypeScript error
+    (ts1117) instead of a silent drop. The delta must not grow either -- every
+    added line is a hunk upstream can collide with.
+    """
+    delta = _fork_delta(VITE_CONFIG_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= VITE_CONFIG_MAX_DELETED, (
+        f"{VITE_CONFIG_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {VITE_CONFIG_MAX_DELETED}). The alias entry must be an ADDED line."
+    )
+    assert added <= VITE_CONFIG_MAX_ADDED, (
+        f"{VITE_CONFIG_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {VITE_CONFIG_MAX_ADDED}). Keep the alias to the one entry that "
+        "resolves the fork's overlay."
     )
 
 
@@ -967,6 +1005,7 @@ def test_fork_modules_exist() -> None:
         "tests/hermes_cli/update_fork/test_update_receipt_legacy.py",
         "apps/desktop/src/app/updates-overlay-fork.tsx",
         "apps/desktop/src/app/updates-overlay-fork.test.tsx",
+        "apps/desktop/src/app/contrib/updates-overlay-resolution-fork.test.tsx",
         "apps/desktop/src/store/update-receipt-fork.ts",
         "apps/desktop/src/store/update-receipt-fork.test.ts",
         "apps/desktop/src/store/updates-fork.ts",

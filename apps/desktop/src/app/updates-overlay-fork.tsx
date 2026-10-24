@@ -15,9 +15,16 @@
  * Everything else stays upstream's: this module renders upstream's own
  * ``UpdatesOverlay`` and only takes the dialog over while the receipt pane
  * applies, so upstream's overlay keeps improving without a re-sync.
+ *
+ * The app reaches THIS module through the Vite alias in
+ * ``apps/desktop/vite.config.ts`` (the specifier ``'../updates-overlay'``
+ * resolves here), so upstream's ``app/contrib/wiring.tsx`` stays byte-identical
+ * to upstream's -- editing that import there was a merge-conflict magnet that
+ * aborted ``hermes update``. The props are typed from upstream's component and
+ * forwarded, because the alias hides upstream's signature from the call site.
  */
 import { useStore } from '@nanostores/react'
-import { useEffect, useRef } from 'react'
+import { type ComponentProps, useEffect, useRef } from 'react'
 
 import { acknowledgeReceipt, getLastReceipt } from '@/api/update-receipts'
 import { Button } from '@/components/ui/button'
@@ -54,7 +61,7 @@ import { UpdatesOverlay as UpstreamUpdatesOverlay } from './updates-overlay'
  *  receipt. Long enough for the desktop backend to finish spawning. */
 const RECEIPT_HYDRATE_RETRY_MS = 2000
 
-export function UpdatesOverlay() {
+export function UpdatesOverlay(props: ComponentProps<typeof UpstreamUpdatesOverlay>) {
   const open = useStore($updateOverlayOpen)
   const target = useStore($updateOverlayTarget)
 
@@ -160,7 +167,7 @@ export function UpdatesOverlay() {
   }, [check, checking, open, receiptPane, status])
 
   if (!receiptPane) {
-    return <UpstreamUpdatesOverlay />
+    return <UpstreamUpdatesOverlay {...props} />
   }
 
   return (

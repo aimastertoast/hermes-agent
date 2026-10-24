@@ -238,6 +238,19 @@ export default defineConfig(({ command }) => ({
       '@hermes/shared/billing': path.resolve(__dirname, '../shared/src/billing-types.ts'),
       '@hermes/shared/color': path.resolve(__dirname, '../shared/src/color.ts'),
       '@hermes/shared': path.resolve(__dirname, '../shared/src'),
+      // FORK: the app mounts the fork's update overlay -- upstream's overlay plus
+      // the receipt-driven error pane that explains a failed update. The fork used
+      // to wire it in by EDITING the import in `app/contrib/wiring.tsx`, the file
+      // upstream rewrites most often; a routine upstream edit turned that into a
+      // merge conflict and aborted `hermes update` ("Update failed (exit 1)"). The
+      // alias leaves `wiring.tsx` byte-identical to upstream's.
+      //
+      // Alias matching is exact (see the driver.js entries below), so this hits
+      // only the specifier `'../updates-overlay'` -- used by `app/contrib/wiring.tsx`
+      // and nothing else. The fork's own overlay imports `'./updates-overlay'`
+      // (upstream's file) and is NOT aliased, so the fork's overlay still wraps
+      // upstream's real implementation.
+      '../updates-overlay': path.resolve(__dirname, './src/app/updates-overlay-fork.tsx'),
       // The tour tool's preview surface injects driver.js's prebuilt IIFE into
       // the pane's guest page as raw source; the package's exports map doesn't
       // expose that dist file (nor ./package.json), so resolve the main entry

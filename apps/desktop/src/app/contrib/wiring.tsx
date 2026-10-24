@@ -157,7 +157,7 @@ import {
 } from '../shell/titlebar'
 import { TitlebarControls } from '../shell/titlebar-controls'
 import { WslgWindowControls } from '../shell/wslg-window-controls'
-import { UpdatesOverlay } from '../updates-overlay-fork'
+import { UpdatesOverlay } from '../updates-overlay'
 
 import { ContribWiringContext } from './context'
 import {

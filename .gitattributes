@@ -75,6 +75,7 @@ docker/entrypoint.sh text eol=lf
 /apps/desktop/src/store/updates.test.ts merge=union
 /apps/desktop/src/store/updates.ts merge=union
 /apps/desktop/src/types/hermes.ts merge=union
+/apps/desktop/vite.config.ts merge=union
 /gateway/run.py merge=union
 /gateway/run_adapters.py merge=union
 /gateway/status.py merge=union
