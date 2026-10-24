@@ -141,6 +141,19 @@ UPDATE_CMD_WINDOWS_TARGET = "hermes_cli/update_cmd_windows.py"
 UPDATE_CMD_WINDOWS_MAX_ADDED = 10
 UPDATE_CMD_WINDOWS_MAX_DELETED = 0
 
+# ``pyproject.toml`` must carry NO fork delta. Upstream rewrites it several times
+# a day, and the fork's only line there was ``testpaths``: it used to add
+# ``hermes_cli/tests`` (the fork's update tests) to upstream's list. Those tests
+# live under ``tests/hermes_cli/update_fork/`` now, so upstream's ``testpaths``
+# is untouched again.
+#
+# The file is deliberately NOT union-listed: union would keep BOTH ``testpaths``
+# lines, and a duplicate key in the same TOML table makes the whole file
+# unparseable -- every tool that reads ``pyproject.toml`` would fail.
+PYPROJECT_TARGET = "pyproject.toml"
+PYPROJECT_MAX_ADDED = 0
+PYPROJECT_MAX_DELETED = 0
+
 # ``.gitignore`` must stay a PURE INSERTION. The fork's only rules that upstream
 # does not have are ``qa-reports/`` and ``%SystemDrive%/``. The fork once dropped
 # upstream's whole build-cache block (``.build/``, ``.cache/``,
@@ -861,6 +874,25 @@ def test_update_status_test_file_is_byte_identical_to_upstream() -> None:
     )
 
 
+def test_pyproject_toml_is_byte_identical_to_upstream() -> None:
+    """``pyproject.toml`` must stay byte-identical to upstream's.
+
+    The fork's only line there was ``testpaths``, where it added the fork's own
+    test directory. That is a MODIFICATION of an upstream line in a file
+    upstream rewrites several times a day -- a conflict magnet that aborted
+    ``hermes update``. The fork's tests live under ``tests/`` now.
+    """
+    delta = _fork_delta(PYPROJECT_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert (added, deleted) == (0, 0), (
+        f"{PYPROJECT_TARGET}: the fork's delta is {added} added / {deleted} deleted "
+        "line(s) of upstream's file. The fork's update tests belong under "
+        "tests/hermes_cli/update_fork/ -- do not touch upstream's ``testpaths``."
+    )
+
+
 # The migrated files and where their fork code belongs when the delta grows again.
 _MIGRATED_DELTA_BUDGETS = (
     (BANNER_TARGET, BANNER_MAX_ADDED, BANNER_MAX_DELETED,
@@ -932,7 +964,7 @@ def test_fork_modules_exist() -> None:
         "tests/hermes_cli/test_source_check_fork_call_sites.py",
         "tests/hermes_cli/test_update_desktop_tail.py",
         "tests/hermes_cli/test_update_acl_fast.py",
-        "hermes_cli/tests/update/test_update_receipt_legacy.py",
+        "tests/hermes_cli/update_fork/test_update_receipt_legacy.py",
         "apps/desktop/src/app/updates-overlay-fork.tsx",
         "apps/desktop/src/app/updates-overlay-fork.test.tsx",
         "apps/desktop/src/store/update-receipt-fork.ts",

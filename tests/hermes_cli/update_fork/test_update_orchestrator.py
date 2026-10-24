@@ -12,7 +12,7 @@ import pytest
 
 from hermes_cli.update_orchestrator import run_update, UpdateOutcome
 from hermes_cli.update_receipt_fork import read_latest_pipeline_receipt
-from hermes_cli.tests.update.conftest import FakeGatewayProcess
+from tests.hermes_cli.update_fork.conftest import FakeGatewayProcess
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ from hermes_cli.tests.update.conftest import FakeGatewayProcess
 # ---------------------------------------------------------------------------
 #
 # Per D4/D7 the brief's update_world fixture requires a `fake_gateway` fixture
-# (already provided by hermes_cli/tests/update/conftest.py) plus the gateway
+# (already provided by tests/hermes_cli/update_fork/conftest.py) plus the gateway
 # swap setup needed in tests so we don't actually try to spawn the production
 # `hermes gateway start` binary in-process.
 #

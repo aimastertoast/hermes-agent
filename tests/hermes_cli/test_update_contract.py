@@ -31,7 +31,7 @@ from hermes_cli.update_contract import (
 # ---------------------------------------------------------------------------
 # Hermetic git-repo helper (Task 8 force-requirement tests).
 #
-# Mirrors the `hermetic_git_repo` fixture in hermes_cli/tests/update/conftest.py
+# Mirrors the `hermetic_git_repo` fixture in tests/hermes_cli/update_fork/conftest.py
 # but as a plain function: pytest's modern fixture-call-directly checks block
 # importing fixtures across directories. The behavior is identical: bare
 # remote at <tmp>/remote.git, clone at <tmp>/repo, three commits on `main`.

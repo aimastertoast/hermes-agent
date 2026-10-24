@@ -31,7 +31,7 @@ def isolated_hermes_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
 
 
 @pytest.fixture
-def hermetic_git_repo(tmp_path: Path) -> "GitRepo":
+def hermetic_git_repo(tmp_path: Path) -> GitRepo:
     """A hermetic git repo + bare remote. Never touches the user's clone."""
     repo_path = tmp_path / "repo"
     remote_path = tmp_path / "remote.git"
@@ -75,7 +75,7 @@ class FakeGatewayProcess:
         self._healthy = True
 
     @classmethod
-    def start(cls, *, simulate_start_failure: bool = False) -> "FakeGatewayProcess":
+    def start(cls, *, simulate_start_failure: bool = False) -> FakeGatewayProcess:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]

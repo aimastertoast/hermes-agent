@@ -142,8 +142,12 @@ class TestWriteUpdateSettings:
     def test_atomic_rename_leaves_no_tmp(self, tmp_path: Path) -> None:
         """A failed write must not leave a half-written ``.tmp`` file that a
         concurrent orchestrator invoke could read."""
-        write_update_settings(tmp_path, UpdateSettings(allow_local_ahead=True))
-        files = list(tmp_path.iterdir())
+        # Its own directory, not tmp_path: the suite's sandbox fixture puts a
+        # fake home in tmp_path, and this asserts that the WRITE leaves nothing
+        # behind but the settings file.
+        home = tmp_path / "home"
+        write_update_settings(home, UpdateSettings(allow_local_ahead=True))
+        files = list(home.iterdir())
         assert len(files) == 1
         assert files[0].name == "update_settings.json"
 

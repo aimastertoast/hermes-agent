@@ -64,7 +64,7 @@ def _install_git_recorder(
 @pytest.fixture
 def no_config(monkeypatch):
     """Keep ``load_config`` out of the test: the guard's verdict is what's under test."""
-    import hermes_cli.config as config
+    from hermes_cli import config
 
     monkeypatch.setattr(config, "load_config", lambda *a, **k: {"updates": {}})
     return config
@@ -104,7 +104,7 @@ def test_falls_back_to_ancestry_when_patch_ids_unavailable(
 
     assert safe is True, "an unreadable tree must not abort the update; commits-only checks still work"
     assert reason == "unmerged:3", reason
-    _, kw = [pair for pair in calls if "cherry" in pair[0]][0]
+    _, kw = next(pair for pair in calls if "cherry" in pair[0])
     assert (kw.get("env") or {}).get("GIT_NO_LAZY_FETCH") == "1", (
         "even off a partial clone, cherry must not be allowed to fetch"
     )

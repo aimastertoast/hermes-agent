@@ -344,7 +344,7 @@ def orchestrator_outcome_to_exit_code(outcome) -> int:
     is set, and otherwise fall back to a deterministic mapping so callers see
     a non-zero exit for any non-success outcome — matches the legacy path's
     contract and the test cases in
-    ``hermes_cli/tests/update/test_update_cmd_wrapper.py``.
+    ``tests/hermes_cli/update_fork/test_update_cmd_wrapper.py``.
     """
     if outcome.exit_code:
         return outcome.exit_code
