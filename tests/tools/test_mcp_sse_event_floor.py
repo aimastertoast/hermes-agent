@@ -1,18 +1,25 @@
-"""Hermes must pass its SSE event-size floor to the SDK's streamable HTTP client.
+"""Hermes' SSE event-size floor must survive upstream touching the same code.
 
-mcp 2.0 passes its own 1 MiB default to every ``EventSource`` it opens
-(``EventSource(response, max_event_size=self.max_sse_event_size)``), which
-defeats the httpx-level ``EventSource`` shim: the shim only widens events the
-caller did NOT limit, and the SDK is now the explicit caller. Cloudflare's
-~3.7k-tool tools/list arrives as ONE event well past 1 MiB, so the server parks
-on "Server-sent event exceeded the 1048576 byte limit". The floor must therefore
-travel through ``streamable_http_client(max_sse_event_size=...)`` itself.
+Upstream now caps every MCP HTTP body and every SSE event at
+``tools.mcp_tool_transport._MCP_HTTP_MAX_BODY_BYTES`` (10 MiB) and hands the same cap to
+the SDK as ``max_sse_event_size``. The fork's floor (64 MiB) used to be passed at the
+transport's call site -- an edit inside an upstream-owned file. Upstream changed those
+very lines, the merge conflicted, and the GUI update stopped: "Merge conflict between
+local commits and upstream".
+
+So the floor travels as a runtime swap of the transport module's own globals: the fork
+edits nothing upstream owns, and upstream can keep changing that file freely. The cap
+function's limit is bound as a default argument at import time, so the module global
+alone cannot move it -- the function is wrapped to force the floor.
+
+Measured: Cloudflare's tools/list arrives as ONE 3.53 MiB SSE event (2026-10-24).
 """
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,55 +27,123 @@ import tools.mcp_tool as _mcp
 from tools.mcp_tool import MCPServerTask
 
 FLOOR = _mcp._SSE_EVENT_SIZE_FLOOR_BYTES
+UPSTREAM_CAP = 10 * 1024 * 1024
 
 
-def _make_task(name: str = "sse-floor-test") -> MCPServerTask:
-    """Minimal MCPServerTask without running the heavy __init__."""
-    task = MCPServerTask.__new__(MCPServerTask)
-    task.name = name
-    task._http_rejection = {}
-    return task
+def _fake_transport_module(cap: int = UPSTREAM_CAP):
+    """A stand-in for ``tools.mcp_tool_transport`` with upstream's cap shape."""
+    recorded: dict = {}
+
+    def _make_mcp_body_cap_transport(httpx_mod, inner_transport, limit: int = cap):
+        recorded["limit"] = limit
+        return SimpleNamespace(httpx_mod=httpx_mod, inner=inner_transport)
+
+    return SimpleNamespace(
+        _MCP_HTTP_MAX_BODY_BYTES=cap,
+        _make_mcp_body_cap_transport=_make_mcp_body_cap_transport,
+        recorded=recorded,
+    )
 
 
-def test_sdk_streamable_client_accepts_max_sse_event_size():
-    """The capability check matches the installed SDK's real signature."""
-    import importlib
-    import inspect
+def test_the_floor_raises_the_transport_module_cap():
+    """Upstream's 10 MiB cap becomes Hermes' floor."""
+    transport = _fake_transport_module()
 
-    fn = getattr(importlib.import_module("mcp.client.streamable_http"),
-                 "streamable_http_client", None)
-    expected = fn is not None and "max_sse_event_size" in inspect.signature(fn).parameters
-    assert _mcp._streamable_http_accepts("max_sse_event_size") is expected
-    assert _mcp._streamable_http_accepts("not_a_real_kwarg") is False
+    _mcp._apply_sse_event_size_floor(transport)
+
+    assert transport._MCP_HTTP_MAX_BODY_BYTES == FLOOR
 
 
-def test_streamable_http_transport_passes_sse_event_floor(monkeypatch):
-    """The transport hands the SDK the 64 MiB floor via ``max_sse_event_size``.
+def test_the_wire_cap_forwards_the_floor():
+    """The cap function's limit is a default argument bound at import time, so the
+    function itself has to carry the floor -- otherwise the wire cap still cuts the
+    event before the SDK ever sees it."""
+    transport = _fake_transport_module()
 
-    SDKs without the kwarg have no per-event cap at all (httpx2 <= 2.7.0), so
-    there is nothing to pass — skip rather than assert.
+    _mcp._apply_sse_event_size_floor(transport)
+    transport._make_mcp_body_cap_transport(object(), object())
+
+    assert transport.recorded["limit"] == FLOOR
+
+
+def test_a_smaller_explicit_limit_is_raised_to_the_floor():
+    transport = _fake_transport_module()
+
+    _mcp._apply_sse_event_size_floor(transport)
+    transport._make_mcp_body_cap_transport(object(), object(), limit=1024)
+
+    assert transport.recorded["limit"] == FLOOR
+
+
+def test_a_larger_cap_is_left_alone():
+    transport = _fake_transport_module(cap=128 * 1024 * 1024)
+
+    _mcp._apply_sse_event_size_floor(transport)
+
+    assert transport._MCP_HTTP_MAX_BODY_BYTES == 128 * 1024 * 1024
+
+
+def test_applying_the_floor_twice_is_a_no_op():
+    """Two callers racing for the first MCP client must not double-wrap the cap."""
+    transport = _fake_transport_module()
+
+    _mcp._apply_sse_event_size_floor(transport)
+    patched = transport._make_mcp_body_cap_transport
+    _mcp._apply_sse_event_size_floor(transport)
+
+    assert transport._make_mcp_body_cap_transport is patched
+    transport._make_mcp_body_cap_transport(object(), object())
+    assert transport.recorded["limit"] == FLOOR
+
+
+def test_a_transport_module_without_the_caps_is_untouched():
+    """Upstream may rename or drop the caps; the floor must degrade, not explode."""
+    transport = SimpleNamespace()
+
+    _mcp._apply_sse_event_size_floor(transport)
+
+    assert not hasattr(transport, "_MCP_HTTP_MAX_BODY_BYTES")
+    assert not hasattr(transport, "_make_mcp_body_cap_transport")
+
+
+def test_the_sdk_receives_the_floor():
+    """End to end: the transport hands the SDK the floor as ``max_sse_event_size``.
+
+    Upstream reads ``_MCP_HTTP_MAX_BODY_BYTES`` from its own module global when it
+    builds the SDK call, so raising that global is what the SDK ends up with.
     """
-    if not _mcp._streamable_http_accepts("max_sse_event_size"):
-        pytest.skip("installed mcp SDK has no max_sse_event_size (no cap either)")
-    task = _make_task()
-    captured: dict = {}
+    import tools.mcp_tool_transport as transport
 
-    @asynccontextmanager
-    async def _fake_streams(url, http_client=None, **kwargs):
-        captured["kwargs"] = kwargs
-        yield (None, None, None)
+    # Register the originals so pytest restores them after this test.
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(transport, "_MCP_HTTP_MAX_BODY_BYTES", transport._MCP_HTTP_MAX_BODY_BYTES)
+    monkey.setattr(transport, "_make_mcp_body_cap_transport", transport._make_mcp_body_cap_transport)
+    try:
+        _mcp._apply_sse_event_size_floor(transport)
+        task = MCPServerTask.__new__(MCPServerTask)
+        task.name = "sse-floor-test"
+        task._http_rejection = {}
+        captured: dict = {}
 
-    monkeypatch.setattr(_mcp, "streamable_http_client", _fake_streams)
+        @asynccontextmanager
+        async def _fake_streams(url, http_client=None, **kwargs):
+            captured["kwargs"] = kwargs
+            yield (None, None, None)
 
-    async def _drive():
-        cm = task._streamable_http_transport(
-            "http://127.0.0.1:9/mcp",
-            {},
-            connect_timeout=5.0, ssl_verify=True, client_cert=None,
-            oauth_auth=None, strict_cfg_headers=True,
-            configured_header_names=set())
-        async with cm:
-            pass
+        monkey.setattr(_mcp, "streamable_http_client", _fake_streams)
 
-    asyncio.run(_drive())
+        async def _drive():
+            cm = task._streamable_http_transport(
+                "http://127.0.0.1:9/mcp",
+                {},
+                connect_timeout=5.0, ssl_verify=True, client_cert=None,
+                oauth_auth=None, strict_cfg_headers=True,
+                configured_header_names=set())
+            async with cm:
+                pass
+
+        asyncio.run(_drive())
+    finally:
+        monkey.undo()
+
     assert captured["kwargs"].get("max_sse_event_size") == FLOOR

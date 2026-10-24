@@ -192,12 +192,12 @@ def _ensure_mcp_sdk() -> bool:
 _SDK_HTTPX_MOD = None
 
 # httpx2 >= 2.12 caps a single SSE event at 1 MiB by default (2.7.0 and older had no
-# cap). Large tool catalogs arrive as ONE event — Cloudflare's ~3.7k-tool tools/list
-# is well past 1 MiB — so the parser aborts mid-stream and the SDK reports the event
-# as lost ("SSE stream ended without a response"), parking the server. The httpx-level
-# shim below covers SDK calls that leave the limit unset; mcp >= 2.0 passes its own
-# 1 MiB default explicitly, so the floor must ALSO travel through
-# ``streamable_http_client(max_sse_event_size=...)`` (see ``_streamable_http_accepts``).
+# cap). Large tool catalogs arrive as ONE event -- Cloudflare's ~3.7k-tool tools/list
+# is 3.53 MiB (measured 2026-10-24) -- so the parser aborts mid-stream and the SDK
+# reports the event as lost ("SSE stream ended without a response"), parking the server.
+# The httpx-level shim below covers SDK calls that leave the limit unset; upstream also
+# caps every MCP body and SSE event itself, so the floor is applied to upstream's own
+# caps by ``_apply_sse_event_size_floor`` (see the comment there).
 _SSE_EVENT_SIZE_FLOOR_BYTES = 64 * 1024 * 1024
 
 
@@ -241,6 +241,10 @@ def sdk_httpx():
     come from the module the SDK itself imports or it fails at the transport layer. Resolved
     from the SDK's transport module, else the newest present; ``None`` if neither imports."""
     global _SDK_HTTPX_MOD
+    try:
+        _apply_sse_event_size_floor()
+    except Exception:  # pragma: no cover — never brick MCP for a compat shim
+        logger.debug("SSE event-size floor not applied", exc_info=True)
     if _SDK_HTTPX_MOD is not None:
         return _SDK_HTTPX_MOD
     try:
@@ -263,21 +267,40 @@ def sdk_httpx():
     return _SDK_HTTPX_MOD
 
 
-def _streamable_http_accepts(kwarg: str) -> bool:
-    """Whether the *installed SDK's* ``streamable_http_client`` takes ``kwarg``.
+def _apply_sse_event_size_floor(transport_mod=None) -> None:
+    """Raise the MCP transport's body/SSE size caps to Hermes' floor.
 
-    Read from the SDK module, not this module's (test-patchable) global. mcp 2.0
-    passes its own 1 MiB default into every ``EventSource`` it opens, defeating
-    the httpx-level shim — the floor must travel through this kwarg instead.
+    Upstream caps every MCP HTTP body and every SSE event at
+    ``tools.mcp_tool_transport._MCP_HTTP_MAX_BODY_BYTES`` (10 MiB) and hands the same cap
+    to the SDK as ``max_sse_event_size``. Both live in an upstream-owned module, so the
+    fork raises them here -- a runtime swap of that module's globals -- instead of
+    editing the upstream file. Upstream changed those very lines and the fork's edit
+    turned the GUI update into a merge conflict ("Merge conflict between local commits
+    and upstream").
+
+    The cap function's limit is bound as a default argument at import time, so the
+    module global alone cannot move it; the function is wrapped to force the floor.
+    Best-effort: an upstream rename leaves the caps at upstream's values.
     """
-    try:
-        fn = importlib.import_module("mcp.client.streamable_http").streamable_http_client
-    except (ImportError, AttributeError):
-        return False
-    try:
-        return kwarg in inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return False
+    if transport_mod is None:
+        try:
+            import tools.mcp_tool_transport as transport_mod
+        except Exception:  # pragma: no cover -- the split module always imports
+            logger.debug("MCP transport module not importable", exc_info=True)
+            return
+    floor = _SSE_EVENT_SIZE_FLOOR_BYTES
+    cap = getattr(transport_mod, "_MCP_HTTP_MAX_BODY_BYTES", None)
+    if isinstance(cap, int) and cap < floor:
+        transport_mod._MCP_HTTP_MAX_BODY_BYTES = floor
+    original = getattr(transport_mod, "_make_mcp_body_cap_transport", None)
+    if original is None or getattr(original, "_hermes_sse_floor", False):
+        return
+
+    def _capped(httpx_mod, inner_transport, limit: int = floor):
+        return original(httpx_mod, inner_transport, limit=max(int(limit), floor))
+
+    _capped._hermes_sse_floor = True
+    transport_mod._make_mcp_body_cap_transport = _capped
 
 
 def _client_session_accepts(kwarg: str) -> bool:
