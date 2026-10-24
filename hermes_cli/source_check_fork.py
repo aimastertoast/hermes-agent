@@ -239,10 +239,13 @@ def fork_branch_check():
 
     The swap is process-wide, not thread-local: for the duration of a check a
     direct ``source_check.check_for_updates`` from another thread would also
-    get the fork's branch check. In this repo nothing calls it directly but
-    this module (the three production call sites and the Desktop bridge, which
-    runs this file's CLI entry, point here), and the fork's check differs from
-    upstream's only in how a local-only branch is answered.
+    get the fork's branch check. In this repo the only production callers are
+    the web update-check route (``hermes_cli/web_routers/actions_fork.py``),
+    the startup banner (``hermes_cli/banner.py``), the ``--version`` line
+    (``hermes_cli/_startup_fast.py``) and the Desktop bridge, which runs this
+    file's CLI entry; every one of them reaches the fork's check through this
+    swap, and the fork's check differs from upstream's only in how a
+    local-only branch is answered.
     """
     global _CHECK_DEPTH, _CHECK_ORIGINAL
     with _CHECK_LOCK:

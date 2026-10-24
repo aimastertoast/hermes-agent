@@ -55,3 +55,6 @@ class TestWatcherRespawnTemplate:
         src = _captured_watcher_source(monkeypatch)
         compile(src, "<watcher>", "exec")
 
+# ---------------------------------------------------------------------------
+# 2. Post-update resume liveness gate
+# ---------------------------------------------------------------------------

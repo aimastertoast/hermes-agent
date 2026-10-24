@@ -81,8 +81,8 @@ RUN_ADAPTERS_MAX_DELETED = 0
 # picks the fork-owned ``hermes_cli/source_check_fork.py`` entry when the
 # checkout ships one; the delta is that choice alone and must not grow.
 DESKTOP_SOURCE_PROBE_TARGET = "apps/desktop/electron/updater/checkout-source.ts"
-DESKTOP_SOURCE_PROBE_MAX_ADDED = 9
-DESKTOP_SOURCE_PROBE_MAX_DELETED = 2
+DESKTOP_SOURCE_PROBE_MAX_ADDED = 22
+DESKTOP_SOURCE_PROBE_MAX_DELETED = 0
 
 # The receipt endpoint's route lives in upstream's ``web_routers/actions.py``.
 # The fork's part is the profile-scoped read plus the acknowledge route; the
@@ -142,6 +142,46 @@ UPDATE_CMD_WINDOWS_MAX_DELETED = 1
 GITIGNORE_TARGET = ".gitignore"
 GITIGNORE_MAX_ADDED = 3
 GITIGNORE_MAX_DELETED = 0
+
+# The files the fork migrated to a pure insertion in one batch. Each of them used to
+# DELETE a line of upstream's file -- a conflict magnet -- and now only adds lines.
+#
+# * ``hermes_cli/banner.py`` is the file upstream rewrites most (54 commits since
+#   2026-09-01). The fork's background update check must reach the fork's branch
+#   check, and it does it through a DECORATOR, so upstream's own ``def _run():``
+#   line stays byte-identical.
+# * ``hermes_cli/_startup_fast.py`` is the ``--version`` line. It must stay
+#   stdlib-only and cheap, so the fork's import stays inside the function; the name
+#   is rebound to the fork's checker right after upstream's own import.
+# * ``hermes_cli/web_routers/_common.py`` is the shared write-path plumbing. The
+#   fork's fail-closed profile rule is a self-contained block in front of
+#   upstream's own ``with`` statements.
+# * ``gateway/status_inline_source.py`` collapses the doubled separators a Windows
+#   path arrives with. The fork's two lines sit in front of upstream's untouched
+#   return.
+# * ``apps/desktop/src/plugins/hermes-bots/group-external-writes.ts`` passes the
+#   background-resume budget at ONE call site. The ONE remaining deletion is
+#   upstream's multi-line call, whose fourth argument genuinely changed -- a real
+#   overlap, so this file keeps its loud conflict and is NOT union-listed.
+BANNER_TARGET = "hermes_cli/banner.py"
+BANNER_MAX_ADDED = 6
+BANNER_MAX_DELETED = 0
+
+STARTUP_FAST_TARGET = "hermes_cli/_startup_fast.py"
+STARTUP_FAST_MAX_ADDED = 5
+STARTUP_FAST_MAX_DELETED = 0
+
+WEB_COMMON_TARGET = "hermes_cli/web_routers/_common.py"
+WEB_COMMON_MAX_ADDED = 12
+WEB_COMMON_MAX_DELETED = 0
+
+STATUS_INLINE_SOURCE_TARGET = "gateway/status_inline_source.py"
+STATUS_INLINE_SOURCE_MAX_ADDED = 6
+STATUS_INLINE_SOURCE_MAX_DELETED = 0
+
+GROUP_EXTERNAL_WRITES_TARGET = "apps/desktop/src/plugins/hermes-bots/group-external-writes.ts"
+GROUP_EXTERNAL_WRITES_MAX_ADDED = 10
+GROUP_EXTERNAL_WRITES_MAX_DELETED = 1
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
@@ -655,6 +695,51 @@ def test_gitignore_fork_delta_stays_within_budget() -> None:
     )
 
 
+# The migrated files and where their fork code belongs when the delta grows again.
+_MIGRATED_DELTA_BUDGETS = (
+    (BANNER_TARGET, BANNER_MAX_ADDED, BANNER_MAX_DELETED,
+     "hermes_cli/source_check_fork.py"),
+    (STARTUP_FAST_TARGET, STARTUP_FAST_MAX_ADDED, STARTUP_FAST_MAX_DELETED,
+     "hermes_cli/source_check_fork.py"),
+    (WEB_COMMON_TARGET, WEB_COMMON_MAX_ADDED, WEB_COMMON_MAX_DELETED,
+     "a fork-owned module next to the router"),
+    (STATUS_INLINE_SOURCE_TARGET, STATUS_INLINE_SOURCE_MAX_ADDED, STATUS_INLINE_SOURCE_MAX_DELETED,
+     "a fork-owned module next to the gateway"),
+    (GROUP_EXTERNAL_WRITES_TARGET, GROUP_EXTERNAL_WRITES_MAX_ADDED, GROUP_EXTERNAL_WRITES_MAX_DELETED,
+     "apps/desktop/src/plugins/hermes-bots/routing.ts"),
+)
+
+
+@pytest.mark.parametrize(
+    "target,max_added,max_deleted,belongs_in", _MIGRATED_DELTA_BUDGETS
+)
+def test_migrated_file_fork_delta_stays_within_budget(
+    target: str, max_added: int, max_deleted: int, belongs_in: str
+) -> None:
+    """A migrated file must keep its tiny, measured delta.
+
+    Every one of these files used to DELETE a line of upstream's file, which made it
+    a conflict magnet: ``hermes update`` merges ``origin/main`` into the fork's branch
+    and ABORTS on any conflict (exit 1 -- the Desktop's "Update failed (exit 1)"
+    banner). The migration turned each one into a pure insertion, and this budget is
+    the ratchet that keeps it there.
+    """
+    delta = _fork_delta(target)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= max_deleted, (
+        f"{target}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {max_deleted}). Every deleted line is a line upstream has to restore "
+        f"in the same hunk to collide. Move the fork's change into {belongs_in}."
+    )
+    assert added <= max_added, (
+        f"{target}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {max_added}). Keep the fork's code in {belongs_in} and leave the "
+        f"call site behind."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
@@ -670,6 +755,7 @@ def test_fork_modules_exist() -> None:
         "hermes_cli/web_routers/actions_fork.py",
         "tests/hermes_cli/test_actions_fork_routes.py",
         "tests/hermes_cli/test_source_check_fork.py",
+        "tests/hermes_cli/test_source_check_fork_call_sites.py",
         "tests/hermes_cli/test_update_desktop_tail.py",
         "tests/hermes_cli/test_update_acl_fast.py",
         "hermes_cli/tests/update/test_update_receipt_legacy.py",
@@ -681,6 +767,7 @@ def test_fork_modules_exist() -> None:
         "apps/desktop/src/store/updates-fork.test.ts",
         "gateway/reconnect_lock_fork.py",
         "tests/gateway/test_reconnect_lock_fork.py",
+        "tests/gateway/test_status_inline_source_fork.py",
         "apps/desktop/electron/updater/checkout-source-fork.test.ts",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"

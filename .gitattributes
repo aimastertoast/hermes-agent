@@ -77,12 +77,14 @@ docker/entrypoint.sh text eol=lf
 /gateway/run.py merge=union
 /gateway/run_adapters.py merge=union
 /gateway/status.py merge=union
+/gateway/status_inline_source.py merge=union
 /hermes_cli/main.py merge=union
 /hermes_cli/subcommands/update.py merge=union
 /hermes_cli/update_completion.py merge=union
 /hermes_cli/update_contract.py merge=union
 /hermes_cli/update_windows_acl.py merge=union
 /hermes_cli/venv_sync.py merge=union
+/hermes_cli/web_routers/_common.py merge=union
 /hermes_cli/web_server.py merge=union
 /scripts/desktop-update/windows.ps1 merge=union
 /tests/gateway/test_gateway_command_line_matcher.py merge=union
@@ -102,3 +104,18 @@ docker/entrypoint.sh text eol=lf
 # A loud conflict is the better failure here: the updater aborts the merge, restores the
 # tree, and the user retries. The fork's delta on this file is a pure insertion, so the
 # conflict is always "add vs. change" and resolves by hand in seconds.
+#
+# The same reasoning keeps these four out of the list, even though the fork's delta on
+# each of them is now a pure insertion:
+# * ``hermes_cli/banner.py`` -- the fork's checker is applied as a DECORATOR on upstream's
+#   ``def _run():``. If upstream edits that line, union keeps both sides and the file ends
+#   up with two ``_run`` definitions -- the second silently wins and the fork's decorator
+#   is gone.
+# * ``hermes_cli/_startup_fast.py`` -- the fork's import sits directly between two of
+#   upstream's import lines, the exact adjacency that turned an upstream modification into
+#   a duplicated import (a SyntaxError) in the ``update_cmd.py`` case above.
+# * ``apps/desktop/electron/updater/checkout-source.ts`` -- the fork's block rewrites the
+#   argv upstream builds. Union would merge it in silently, so an upstream rename of that
+#   argv becomes a broken desktop build instead of a loud conflict.
+# * ``apps/desktop/src/plugins/hermes-bots/group-external-writes.ts`` -- the one remaining
+#   deletion is upstream's multi-line call, whose argument genuinely changed.

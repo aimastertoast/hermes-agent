@@ -31,7 +31,8 @@ import { $groupChats, appendGroupChatEntry, updateGroupChat } from './group-chat
 import type { GroupChatRoom } from './group-chat'
 import { groupMemberKey, groupSessionKey, groupSessionMemberKey, groupSessionThread } from './group-membership'
 import { GROUP_PROMPT_HEADER_PREFIX } from './group-round-prompt'
-import { GROUP_SESSION_BACKGROUND_RESUME_OPTIONS, requestForBot } from './routing'
+import { requestForBot } from './routing'
+import { GROUP_SESSION_BACKGROUND_RESUME_OPTIONS } from './routing'
 import type { GroupMember } from './types'
 
 /** A transcript row as `session.resume` reports it; `content` is a plain string

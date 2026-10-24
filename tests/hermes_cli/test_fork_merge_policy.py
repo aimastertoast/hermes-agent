@@ -54,6 +54,10 @@ def _fork_delta() -> dict[str, tuple[int, int]] | None:
     measuring against the ref would count upstream's own newer commits as if the fork
     had removed those lines. None when there is no upstream ref to measure against.
 
+    The WORKING TREE is measured, not just HEAD, so a fork change that is still in
+    progress is judged by the same rule as a committed one -- and so both this test and
+    the fork-delta ratchet answer the same question about the same tree.
+
     One unfiltered ``git diff`` for the whole list: passing a path like
     ``gateway/run.py`` in argv trips tests/conftest.py's live-system guard, which
     cannot tell a read-only diff from a gateway spawn.
@@ -67,7 +71,7 @@ def _fork_delta() -> dict[str, tuple[int, int]] | None:
     base = _git("merge-base", "HEAD", ref).stdout.strip()
     if not base:
         return None
-    result = _git("diff", "--numstat", base, "HEAD")
+    result = _git("diff", "--numstat", base)
     assert result.returncode == 0, result.stderr
     delta: dict[str, tuple[int, int]] = {}
     for line in result.stdout.splitlines():
@@ -145,6 +149,9 @@ MIGRATED_TO_FORK_OWNED = (
     # from hermes_cli/web_routers/actions_fork.py, so upstream's file is
     # byte-identical again)
     "hermes_cli/web_routers/actions.py",
+    # the Windows gateway teardown test (upstream's own file again -- the fork's
+    # variant of the resume case lives in a fork-owned test module)
+    "tests/hermes_cli/test_windows_gateway_job_teardown.py",
 )
 
 

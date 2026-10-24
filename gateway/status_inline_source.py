@@ -144,8 +144,9 @@ def _bootstrap_entry(source: str, argv: list[str]) -> list[str] | None:
     # a Windows path arrives with DOUBLED separators ("C://app//hermes_cli//main.py"). Collapsing them
     # is what lets the entrypoint check below match "hermes_cli/main.py".
     if kind == "path":
-        return [re.sub(r"/{2,}", "/", target), *(re.sub(r"/{2,}", "/", item) for item in argv)]
-    return ["-m", target, *argv]
+        target = re.sub(r"/{2,}", "/", target)
+        argv = [re.sub(r"/{2,}", "/", item) for item in argv]
+    return [target, *argv] if kind == "path" else ["-m", target, *argv]
 
 
 def inline_bootstrap_argv(tokens: list[str]) -> list[str] | None:

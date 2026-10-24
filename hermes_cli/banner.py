@@ -280,12 +280,15 @@ def prefetch_update_check():
         _update_check_done.set()
         return
 
+    # The fork's checker: a local-only branch is measured against main
+    # instead of being reported as an unreachable update server. The swap is
+    # scoped to the call below, so upstream's own line stays untouched.
+    from hermes_cli.source_check_fork import fork_branch_check
+
+    @fork_branch_check()
     def _run():
         global _update_result
-        # The fork's checker: a local-only branch is measured against main
-        # instead of being reported as an unreachable update server.
-        from hermes_cli.source_check_fork import check_for_updates
-        _update_result = check_for_updates(passive=True).get("behind")
+        _update_result = source_check.check_for_updates(passive=True).get("behind")
         _update_check_done.set()
     _daemon(None, _run)
 
