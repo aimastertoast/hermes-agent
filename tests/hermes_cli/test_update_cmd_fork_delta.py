@@ -284,26 +284,29 @@ GROUP_EXTERNAL_WRITES_MAX_DELETED = 1
 
 # The font pickers' settings scope. The fork's scoped read and write live in
 # ``apps/desktop/src/app/hooks/use-config-record-fork.ts``: the pickers keep
-# upstream's bytes, and only two lines change -- the import path, and the
-# cache-write call, which now passes the read origin so the record lands in
-# the row of the profile it was READ from even if the scope moved on while
-# the save was in flight. Their two test files change only the module they
-# mock.
+# upstream's bytes, and the fork's scoped bindings SHADOW upstream's unscoped
+# names inside the component, so the delta on each picker is a PURE INSERTION
+# (the fork's import of its own module, the two shadowing bindings, and the
+# comment that says why). Upstream rewrote these files seven times in three
+# weeks, so a MODIFIED line here was a conflict magnet that aborted
+# ``hermes update``. Their two test files mock BOTH modules -- upstream's
+# (the picker still imports it) and the fork's (the scoped one it actually
+# uses) -- which is again a pure insertion.
 CHAT_FONT_SETTING_TARGET = "apps/desktop/src/app/settings/chat-font-setting.tsx"
-CHAT_FONT_SETTING_MAX_ADDED = 2
-CHAT_FONT_SETTING_MAX_DELETED = 2
+CHAT_FONT_SETTING_MAX_ADDED = 17
+CHAT_FONT_SETTING_MAX_DELETED = 0
 
 TERMINAL_FONT_SETTING_TARGET = "apps/desktop/src/app/settings/terminal-font-setting.tsx"
-TERMINAL_FONT_SETTING_MAX_ADDED = 2
-TERMINAL_FONT_SETTING_MAX_DELETED = 2
+TERMINAL_FONT_SETTING_MAX_ADDED = 17
+TERMINAL_FONT_SETTING_MAX_DELETED = 0
 
 CHAT_FONT_SETTING_TEST_TARGET = "apps/desktop/src/app/settings/chat-font-setting.test.tsx"
-CHAT_FONT_SETTING_TEST_MAX_ADDED = 1
-CHAT_FONT_SETTING_TEST_MAX_DELETED = 1
+CHAT_FONT_SETTING_TEST_MAX_ADDED = 9
+CHAT_FONT_SETTING_TEST_MAX_DELETED = 0
 
 TERMINAL_FONT_SETTING_TEST_TARGET = "apps/desktop/src/app/settings/terminal-font-setting.test.tsx"
-TERMINAL_FONT_SETTING_TEST_MAX_ADDED = 1
-TERMINAL_FONT_SETTING_TEST_MAX_DELETED = 1
+TERMINAL_FONT_SETTING_TEST_MAX_ADDED = 5
+TERMINAL_FONT_SETTING_TEST_MAX_DELETED = 0
 
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70

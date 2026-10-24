@@ -12,7 +12,12 @@ import {
 } from '@/themes/chat-font'
 import type { HermesConfigRecord } from '@/types/hermes'
 
-import { setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config-record-fork'
+// eslint-disable-next-line unused-imports/no-unused-imports -- FORK: shadowed by the fork's scoped bindings inside the component
+import { setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config-record'
+import {
+  setHermesConfigCache as setHermesConfigCacheScoped,
+  useHermesConfigRecord as useHermesConfigRecordScoped
+} from '../hooks/use-config-record-fork'
 import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { useProfileSwitchLatch } from '../hooks/use-profile-switch-latch'
 
@@ -35,7 +40,19 @@ function fontFamilyFromConfig(config: HermesConfigRecord): string {
 export function ChatFontSetting() {
   const { t } = useI18n()
   const copy = t.settings.appearance
+  // FORK: the settings pages edit a NAMED profile (the shared "Applies to"
+  // scope), so this picker must read and write THAT profile's config record
+  // instead of the active gateway's. The fork's module wraps upstream's hook
+  // with that scope; this binding shadows upstream's unscoped name inside
+  // this component, so upstream's own call sites keep working and the fork's
+  // delta on this file stays a pure insertion -- a hunk that can never
+  // conflict with an upstream edit and abort `hermes update`.
+  const useHermesConfigRecord = useHermesConfigRecordScoped
   const { data: loadedConfig, dataUpdatedAt, writeScope } = useHermesConfigRecord()
+  // FORK: hand the read origin to the fork's cache write, so the record lands
+  // in the row it was READ from even if the settings scope moved on while the
+  // save was in flight.
+  const setHermesConfigCache = (next: HermesConfigRecord) => setHermesConfigCacheScoped(next, writeScope)
   const [draft, setDraft] = useState<string | null>(null)
   // The seed effect refuses to reseed while the query still carries the
   // previous profile's stamp. A structurally-shared refetch keeps the object
@@ -95,7 +112,7 @@ export function ChatFontSetting() {
             return
           }
 
-          setHermesConfigCache(next, writeScope)
+          setHermesConfigCache(next)
         })
         .catch(error => {
           if (saveVersionRef.current !== version) {

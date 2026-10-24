@@ -40,6 +40,11 @@ vi.mock('@/store/notifications', () => ({
   notifyError: (...args: unknown[]) => mocks.notifyError(...args)
 }))
 
+vi.mock('../hooks/use-config-record', () => ({
+  setHermesConfigCache: (config: Record<string, unknown>) => mocks.cache(config),
+  useHermesConfigRecord: () => ({ data: mocks.loadedConfig, dataUpdatedAt: mocks.configUpdatedAt })
+}))
+
 vi.mock('../hooks/use-config-record-fork', () => ({
   setHermesConfigCache: (config: Record<string, unknown>) => mocks.cache(config),
   useHermesConfigRecord: () => ({ data: mocks.loadedConfig, dataUpdatedAt: mocks.configUpdatedAt })
