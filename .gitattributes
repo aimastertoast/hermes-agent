@@ -57,6 +57,7 @@ docker/entrypoint.sh text eol=lf
 #
 # Files whose fork delta modifies upstream lines are deliberately ABSENT: they keep
 # the loud conflict, which is the only safe outcome for a genuine overlap.
+/.gitignore merge=union
 /apps/desktop/electron/main.ts merge=union
 /apps/desktop/electron/preload.ts merge=union
 /apps/desktop/src/api/client.ts merge=union

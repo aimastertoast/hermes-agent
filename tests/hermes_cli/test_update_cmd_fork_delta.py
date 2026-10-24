@@ -132,6 +132,17 @@ UPDATE_CMD_WINDOWS_TARGET = "hermes_cli/update_cmd_windows.py"
 UPDATE_CMD_WINDOWS_MAX_ADDED = 4
 UPDATE_CMD_WINDOWS_MAX_DELETED = 1
 
+# ``.gitignore`` must stay a PURE INSERTION. The fork's only rule that upstream
+# does not have is ``qa-reports/``. The fork once dropped upstream's whole
+# build-cache block (``.build/``, ``.cache/``, ``/pm/.lock.json.lock``,
+# ``apps/desktop/.dist-build*``) in a commit whose message only announced
+# ``qa-reports/`` -- and untracked build debris then made the parked-branch
+# guard refuse every update. Restoring upstream's rules is the fix; the budget
+# keeps the fork from re-deleting them.
+GITIGNORE_TARGET = ".gitignore"
+GITIGNORE_MAX_ADDED = 3
+GITIGNORE_MAX_DELETED = 0
+
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
 # update_cmd.py is NOT listed ``merge=union`` (see .gitattributes for the measured reason:
@@ -617,6 +628,30 @@ def test_update_cmd_windows_fork_delta_stays_within_budget() -> None:
         f"{UPDATE_CMD_WINDOWS_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
         f"(budget {UPDATE_CMD_WINDOWS_MAX_ADDED}). Keep the relaunch in "
         f"hermes_cli/update_cmd_windows_fork.py and leave the delegation behind."
+    )
+
+
+def test_gitignore_fork_delta_stays_within_budget() -> None:
+    """``.gitignore`` must stay a pure insertion of the fork's own rule.
+
+    Upstream owns the ignore rules for the build caches, the PM lockfile and the
+    electron-builder scratch dirs. Deleting them makes untracked debris dirty
+    the tree, and the parked-branch guard then refuses every update -- the
+    failure this file's own history already produced once.
+    """
+    delta = _fork_delta(GITIGNORE_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= GITIGNORE_MAX_DELETED, (
+        f"{GITIGNORE_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {GITIGNORE_MAX_DELETED}). Every deleted ignore rule lets untracked debris "
+        f"dirty the tree, and the parked-branch guard then refuses the update."
+    )
+    assert added <= GITIGNORE_MAX_ADDED, (
+        f"{GITIGNORE_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {GITIGNORE_MAX_ADDED}). Upstream's patterns already cover the build caches; "
+        f"only a genuinely fork-specific rule belongs here."
     )
 
 
