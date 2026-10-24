@@ -283,6 +283,12 @@ MAX_DELETED = 0
 
 # ``update_cmd_git.py`` carries the same rule: the fork's git-timeout work lives in
 # ``hermes_cli/update_git_timeout.py`` and only the installer call stays in the file.
+# It IS union-listed (unlike ``update_cmd.py``): the fork's block is a self-contained
+# APPEND at the end of the file, and the union of that block with upstream's edits was
+# checked to parse and to keep the installer call for four upstream shapes -- a reworded
+# message in the last function, a helper appended at EOF, a helper inserted just above
+# the fork's block, and a comment added inside the last function's body. Upstream
+# rewrites this file 49 times since 2026-09-01, so a conflict here is a matter of time.
 GIT_MAX_ADDED = 20
 GIT_MAX_DELETED = 0
 
