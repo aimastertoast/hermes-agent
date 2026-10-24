@@ -71,6 +71,7 @@ docker/entrypoint.sh text eol=lf
 /apps/desktop/src/plugins/hermes-bots/group-external-writes.test.ts merge=union
 /apps/desktop/src/plugins/hermes-bots/routing.ts merge=union
 /apps/desktop/src/store/updates.test.ts merge=union
+/apps/desktop/src/store/updates.ts merge=union
 /apps/desktop/src/types/hermes.ts merge=union
 /gateway/run.py merge=union
 /gateway/status.py merge=union

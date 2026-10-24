@@ -51,16 +51,19 @@ DESKTOP_WIRING_TARGET = "apps/desktop/src/app/contrib/wiring.tsx"
 DESKTOP_WIRING_MAX_ADDED = 1
 DESKTOP_WIRING_MAX_DELETED = 1
 
-# ``apps/desktop/src/store/updates.ts`` is upstream's store, but the fork adds
-# the two update-settings atoms and the post-apply relaunch fix to it. The
-# receipt atoms used to live here too; they moved to the fork-owned
+# ``apps/desktop/src/store/updates.ts`` is upstream's store. The fork's part
+# (the two update-settings atoms and the post-apply relaunch fix) lives in the
+# fork-owned ``apps/desktop/src/store/updates-fork.ts``; upstream's file keeps
+# only a re-export of the atoms (so every existing consumer still imports them
+# from ``@/store/updates``) and the two call sites of the relaunch helper.
+# The receipt atoms used to live here too; they moved to the fork-owned
 # ``apps/desktop/src/store/update-receipt-fork.ts`` (a global "acknowledged"
 # boolean was never reset, so it hid every receipt forever -- the server owns
 # the per-receipt flag). The budget below is the measured delta AFTER that
 # move, so the remaining delta cannot grow back.
 DESKTOP_UPDATES_STORE_TARGET = "apps/desktop/src/store/updates.ts"
-DESKTOP_UPDATES_STORE_MAX_ADDED = 82
-DESKTOP_UPDATES_STORE_MAX_DELETED = 3
+DESKTOP_UPDATES_STORE_MAX_ADDED = 12
+DESKTOP_UPDATES_STORE_MAX_DELETED = 0
 
 # The Desktop's bridge runs the update check's Python entry. Upstream's entry
 # answers a branch that lives only on the fork remote with
@@ -569,6 +572,8 @@ def test_fork_modules_exist() -> None:
         "apps/desktop/src/app/updates-overlay-fork.test.tsx",
         "apps/desktop/src/store/update-receipt-fork.ts",
         "apps/desktop/src/store/update-receipt-fork.test.ts",
+        "apps/desktop/src/store/updates-fork.ts",
+        "apps/desktop/src/store/updates-fork.test.ts",
         "apps/desktop/electron/updater/checkout-source-fork.test.ts",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
