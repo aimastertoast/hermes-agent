@@ -65,6 +65,15 @@ DESKTOP_UPDATES_STORE_TARGET = "apps/desktop/src/store/updates.ts"
 DESKTOP_UPDATES_STORE_MAX_ADDED = 12
 DESKTOP_UPDATES_STORE_MAX_DELETED = 0
 
+# ``gateway/run_adapters.py`` is upstream's adapter lifecycle mixin, and the
+# fork's cross-profile lock-conflict parking (auto-recovery on holder PID exit)
+# lives in the fork-owned ``gateway/reconnect_lock_fork.py``. Two thin
+# delegations stay in the upstream file, so its delta is a pure insertion and a
+# routine upstream edit next to them merges cleanly.
+RUN_ADAPTERS_TARGET = "gateway/run_adapters.py"
+RUN_ADAPTERS_MAX_ADDED = 12
+RUN_ADAPTERS_MAX_DELETED = 0
+
 # The Desktop's bridge runs the update check's Python entry. Upstream's entry
 # answers a branch that lives only on the fork remote with
 # ``error="branch-local-only"``, which the About pane renders as "couldn't
@@ -426,6 +435,31 @@ def test_desktop_updates_store_fork_delta_stays_within_budget() -> None:
     )
 
 
+def test_run_adapters_fork_delta_stays_within_budget() -> None:
+    """The cross-profile lock-conflict parking must stay out of the upstream mixin.
+
+    ``gateway/run_adapters.py`` is upstream's adapter lifecycle mixin, and the
+    fork's lock-conflict behaviour (auto-recovery on holder PID exit) lives in
+    the fork-owned ``gateway/reconnect_lock_fork.py``. Two thin delegations stay
+    in the upstream file -- a pure insertion, so a routine upstream edit next to
+    them merges cleanly.
+    """
+    delta = _fork_delta(RUN_ADAPTERS_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= RUN_ADAPTERS_MAX_DELETED, (
+        f"{RUN_ADAPTERS_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {RUN_ADAPTERS_MAX_DELETED}). Move the fork's code into "
+        f"gateway/reconnect_lock_fork.py."
+    )
+    assert added <= RUN_ADAPTERS_MAX_ADDED, (
+        f"{RUN_ADAPTERS_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {RUN_ADAPTERS_MAX_ADDED}). Move the fork's lock-conflict code into "
+        f"gateway/reconnect_lock_fork.py and leave a call site behind."
+    )
+
+
 def test_actions_router_fork_delta_stays_within_budget() -> None:
     """The update routes must stay out of the upstream-owned router.
 
@@ -574,6 +608,8 @@ def test_fork_modules_exist() -> None:
         "apps/desktop/src/store/update-receipt-fork.test.ts",
         "apps/desktop/src/store/updates-fork.ts",
         "apps/desktop/src/store/updates-fork.test.ts",
+        "gateway/reconnect_lock_fork.py",
+        "tests/gateway/test_reconnect_lock_fork.py",
         "apps/desktop/electron/updater/checkout-source-fork.test.ts",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
