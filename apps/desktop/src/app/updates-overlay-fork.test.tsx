@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n/context'
 import { en } from '@/i18n/en'
+import { forkStrings } from '@/i18n/fork'
 import { $lastReceipt } from '@/store/update-receipt-fork'
 import { $updateApply, $updateChecking, $updateOverlayOpen, $updateOverlayTarget, $updateStatus } from '@/store/updates'
 import type { UpdateReceipt } from '@/types/hermes'
@@ -130,7 +131,7 @@ describe('UpdatesOverlay — receipt-driven idle view', (): void => {
 
     // Acknowledge / View receipt / Check now actions are all present.
     expect(screen.getByTestId('updates-overlay-acknowledge')).toBeTruthy()
-    expect(screen.getByText(en.updates.viewReceipt)).toBeTruthy()
+    expect(screen.getByText(forkStrings.updateReceipt.viewReceipt)).toBeTruthy()
     expect(screen.getByText(en.updates.checkNow)).toBeTruthy()
   })
 

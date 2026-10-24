@@ -1,7 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { type ReactElement, useContext } from 'react'
 
-import { useI18n } from '@/i18n'
+import { forkStrings } from '@/i18n/fork'
 import { SlidersHorizontal } from '@/lib/icons'
 import { $updateAllowLocalAhead, $updateSafeModeAuto } from '@/store/updates'
 
@@ -13,8 +13,7 @@ import { SectionHeading, SettingsBreadcrumbContext, ToggleRow } from './primitiv
  *  invoke. Defaults are off: the user must opt in once per mode. */
 export function UpdatesSettings(): ReactElement {
   const hasBreadcrumb = useContext(SettingsBreadcrumbContext)
-  const { t } = useI18n()
-  const u = t.settings.about.updateModes
+  const u = forkStrings.updateModes
   const safeModeAuto = useStore($updateSafeModeAuto)
   const allowLocalAhead = useStore($updateAllowLocalAhead)
 

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DesktopUpdateStatus, DesktopVersionInfo } from '@/global'
 import { I18nProvider, type Locale, TRANSLATIONS, type Translations } from '@/i18n'
 import { en } from '@/i18n/en'
+import { forkStrings } from '@/i18n/fork'
 import type { UpdateApplyState } from '@/store/updates'
 
 import { deriveUpdateStatusFromReceipt } from './update-receipt-status'
@@ -321,7 +322,7 @@ describe('deriveUpdateStatusFromReceipt', () => {
       rolled_back: true,
       steps: [{ name: 'verify', detail: 'expected sha256=abc123, got def456' }]
     } as const
-    const view = deriveUpdateStatusFromReceipt(receipt, en.updates)
+    const view = deriveUpdateStatusFromReceipt(receipt, forkStrings.updateReceipt)
 
     // The line MUST contain the actual receipt error — not the generic
     // cantReach lie the liveness-based About card used to show.
@@ -343,7 +344,7 @@ describe('deriveUpdateStatusFromReceipt', () => {
       rolled_back: false,
       steps: []
     } as const
-    const view = deriveUpdateStatusFromReceipt(receipt, en.updates)
+    const view = deriveUpdateStatusFromReceipt(receipt, forkStrings.updateReceipt)
 
     expect(view.tone).toBe('success')
     expect(view.line).toContain('abcdef0')
@@ -360,7 +361,7 @@ describe('deriveUpdateStatusFromReceipt', () => {
       steps: [{ name: 'merge', detail: ['config.yaml', 'agents/registry.json'] }],
       backup_ref: 'backup-123'
     } as const
-    const view = deriveUpdateStatusFromReceipt(receipt, en.updates)
+    const view = deriveUpdateStatusFromReceipt(receipt, forkStrings.updateReceipt)
 
     expect(view.tone).toBe('warning')
     expect(view.action).toBe('resolve-conflict')
@@ -372,7 +373,7 @@ describe('deriveUpdateStatusFromReceipt', () => {
   })
 
   it('null receipt: idle empty status', () => {
-    const view = deriveUpdateStatusFromReceipt(null, en.updates)
+    const view = deriveUpdateStatusFromReceipt(null, forkStrings.updateReceipt)
 
     expect(view.tone).toBe('idle')
     expect(view.line).toBe('')
@@ -387,7 +388,7 @@ describe('deriveUpdateStatusFromReceipt', () => {
       rolled_back: false,
       steps: [{ name: 'gateway_swap', ok: false, detail: 'new-health-timeout' }]
     } as const
-    const view = deriveUpdateStatusFromReceipt(receipt, en.updates)
+    const view = deriveUpdateStatusFromReceipt(receipt, forkStrings.updateReceipt)
 
     expect(view.tone).toBe('error')
     expect(view.action).toBe('view-receipt')

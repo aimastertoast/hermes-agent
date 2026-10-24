@@ -102,3 +102,32 @@ def test_union_list_covers_only_existing_files() -> None:
     """A listed path that does not exist is a typo that silently disables the policy."""
     for path in _union_paths():
         assert (REPO / path).is_file(), f"{path} is listed in .gitattributes but does not exist"
+
+
+# Upstream rewrites these in (almost) every commit -- the per-locale catalogs
+# grow a key per feature -- so a fork line in them is a conflict waiting to
+# happen, and a conflict aborts ``hermes update`` (the GUI's "Update failed
+# (exit 1)" banner). The fork's update strings therefore live in
+# ``apps/desktop/src/i18n/fork.ts`` (fork-owned), and the catalogs upstream
+# ships are byte-identical again.
+MIGRATED_TO_FORK_OWNED = (
+    "apps/desktop/src/i18n/en.ts",
+    "apps/desktop/src/i18n/types.ts",
+    "apps/desktop/src/i18n/fr.ts",
+    "apps/desktop/src/i18n/es.ts",
+    "apps/desktop/src/i18n/de.ts",
+    "apps/desktop/src/i18n/overlay-gaps.json",
+)
+
+
+@pytest.mark.parametrize("path", MIGRATED_TO_FORK_OWNED)
+def test_migrated_file_carries_no_fork_delta(path: str) -> None:
+    """A migrated file must be byte-identical to upstream."""
+    delta = _fork_delta()
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    assert path not in delta, (
+        f"{path} carries a fork delta ({delta[path][0]} added, {delta[path][1]} removed). "
+        "That content belongs in a fork-owned module: upstream rewrites this file in "
+        "almost every commit, and the conflict aborts the GUI update."
+    )

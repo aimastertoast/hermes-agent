@@ -1,4 +1,4 @@
-import type { Translations } from '@/i18n'
+import type { ForkUpdateReceiptStrings } from '@/i18n/fork'
 import type { UpdateReceipt } from '@/types/hermes'
 
 /** Receipt-driven overlay status. The orchestrator writes the truth
@@ -35,7 +35,7 @@ interface ReceiptLike {
 
 export function deriveUpdateStatusFromReceipt(
   receipt: ReceiptLike | null,
-  u: Translations['updates']
+  u: ForkUpdateReceiptStrings
 ): ReceiptStatusView {
   if (!receipt) {
     return { action: null, error: null, line: '', tone: 'idle' }

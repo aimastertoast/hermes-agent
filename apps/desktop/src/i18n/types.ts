@@ -958,19 +958,7 @@ catalog: CatalogTranslations
       screenRecording: string
       driverHealth: string
     }
-    about: {
-      updates: string
-      channel: UpdateChannelCopy
-      /** Renderer-side toggles for the orchestrator's update modes (task 9
-       *  atoms: $updateSafeModeAuto, $updateAllowLocalAhead). */
-      updateModes: {
-        title: string
-        safeModeAutoLabel: string
-        safeModeAutoDescription: string
-        allowLocalAheadLabel: string
-        allowLocalAheadDescription: string
-      }
-    }
+    about: { updates: string; channel: UpdateChannelCopy }
     config: {
       minimizeToTrayTitle: string
       minimizeToTrayDesc: string
@@ -3296,20 +3284,6 @@ catalog: CatalogTranslations
     versionDetailsRuntimeExternal: string
     versionDetailsInstallId: string
     versionDetailsUncommittedChanges: string
-    /** Receipt-driven update status (Task 11): the overlay shows the
-     *  orchestrator's actual outcome instead of a generic "couldn't reach"
-     *  lie. These copy fields back the receipt's `outcome`, `error`, and
-     *  step detail straight into the user's status line. */
-    updateSucceeded: string
-    updateConflict: string
-    updateConflictResolve: string
-    updateFailed: string
-    /** Receipt-driven overlay actions (Task 13). The Acknowledge button
-     *  flips the receipt's own `acknowledged` flag and POSTs
-     *  `/receipt/:id/ack`; View receipt deep-links into the orchestrator's
-     *  logged receipt. */
-    acknowledge: string
-    viewReceipt: string
   }
 
   install: {

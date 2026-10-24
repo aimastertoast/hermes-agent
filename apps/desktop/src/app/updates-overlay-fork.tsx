@@ -31,6 +31,7 @@ import {
 import { ErrorIcon } from '@/components/ui/error-state'
 import { deriveUpdateStatusFromReceipt } from '@/components/update-receipt-status'
 import { useI18n } from '@/i18n'
+import { forkStrings } from '@/i18n/fork'
 import { $lastReceipt } from '@/store/update-receipt-fork'
 import {
   $backendUpdateApply,
@@ -188,7 +189,8 @@ export function UpdatesOverlay() {
 function ReceiptErrorView({ onRetryCheck, receipt }: { onRetryCheck: () => void; receipt: UpdateReceipt }) {
   const { t } = useI18n()
   const u = t.updates
-  const receiptView = deriveUpdateStatusFromReceipt(receipt, u)
+  const f = forkStrings.updateReceipt
+  const receiptView = deriveUpdateStatusFromReceipt(receipt, f)
 
   const handleAcknowledge = () => {
     // Optimistic local update: mark the receipt acknowledged right away so
@@ -231,7 +233,7 @@ function ReceiptErrorView({ onRetryCheck, receipt }: { onRetryCheck: () => void;
           {u.checkNow}
         </Button>
         <Button data-testid="updates-overlay-acknowledge" onClick={handleAcknowledge} size="sm">
-          {u.acknowledge}
+          {f.acknowledge}
         </Button>
         <Button asChild size="sm" variant="text">
           <a
@@ -243,7 +245,7 @@ function ReceiptErrorView({ onRetryCheck, receipt }: { onRetryCheck: () => void;
               )
             }}
           >
-            {u.viewReceipt}
+            {f.viewReceipt}
           </a>
         </Button>
       </div>
