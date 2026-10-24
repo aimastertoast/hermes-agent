@@ -121,6 +121,17 @@ ACL_TARGET = "hermes_cli/update_windows_acl.py"
 ACL_MAX_ADDED = 8
 ACL_MAX_DELETED = 0
 
+# ``hermes_cli/update_cmd_windows.py`` is upstream's Windows gateway-lifecycle
+# module. The fork's part (the Scheduled-Task relaunch, which spawns outside the
+# updater's Job Object, and the post-update gate) lives in the fork-owned
+# ``hermes_cli/update_cmd_windows_fork.py``; only the delegation and the fork's
+# comment stay in the upstream file. The ONE remaining deletion is upstream's
+# original call line, whose TARGET genuinely changed -- a real overlap, so this
+# file is deliberately NOT union-listed and must keep its loud conflict.
+UPDATE_CMD_WINDOWS_TARGET = "hermes_cli/update_cmd_windows.py"
+UPDATE_CMD_WINDOWS_MAX_ADDED = 4
+UPDATE_CMD_WINDOWS_MAX_DELETED = 1
+
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
 # update_cmd.py is NOT listed ``merge=union`` (see .gitattributes for the measured reason:
@@ -586,10 +597,35 @@ def test_acl_step_fork_delta_stays_within_budget() -> None:
     )
 
 
+def test_update_cmd_windows_fork_delta_stays_within_budget() -> None:
+    """The Windows relaunch must stay out of upstream's lifecycle module.
+
+    ``hermes_cli/update_cmd_windows.py`` is upstream's, and the fork's
+    Scheduled-Task relaunch plus its post-update gate live in the fork-owned
+    ``hermes_cli/update_cmd_windows_fork.py``. Only the delegation stays here.
+    """
+    delta = _fork_delta(UPDATE_CMD_WINDOWS_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= UPDATE_CMD_WINDOWS_MAX_DELETED, (
+        f"{UPDATE_CMD_WINDOWS_TARGET}: the fork now DELETES {deleted} line(s) of upstream's "
+        f"file (budget {UPDATE_CMD_WINDOWS_MAX_DELETED}). Move the fork's change into "
+        f"hermes_cli/update_cmd_windows_fork.py."
+    )
+    assert added <= UPDATE_CMD_WINDOWS_MAX_ADDED, (
+        f"{UPDATE_CMD_WINDOWS_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {UPDATE_CMD_WINDOWS_MAX_ADDED}). Keep the relaunch in "
+        f"hermes_cli/update_cmd_windows_fork.py and leave the delegation behind."
+    )
+
+
 def test_fork_modules_exist() -> None:
     """The fork-owned modules the call sites point at must be present."""
     for path in (
         "hermes_cli/update_cmd_fork.py",
+        "hermes_cli/update_cmd_windows_fork.py",
+        "tests/hermes_cli/test_update_cmd_windows_fork.py",
         "hermes_cli/update_transient_retry.py",
         "hermes_cli/update_git_timeout.py",
         "hermes_cli/update_receipt_fork.py",

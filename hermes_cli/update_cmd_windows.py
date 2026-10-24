@@ -21,19 +21,6 @@ logger = logging.getLogger("hermes_cli.update_cmd")  # log-record parity with th
 
 _BACKEND_PURPOSES = ("serve", "dashboard")
 
-# Gate for the atexit resume callback (Defect B ordering fix): True only after the update flow's
-# fetch succeeded (checkout about to move / update completing normally). While False (failed fetch,
-# pre-fetch abort) the resume callback only restores gateways THIS updater paused - job-proof via
-# the Scheduled Task - and skips the post-update launcher refresh / cold-start handling, so a
-# transient GitHub 429 "touches nothing else" and never recreates the #48820 Job-Object kill window.
-UPDATE_APPLIED_NEW_CODE = False
-
-
-def _set_update_applied_new_code(value: bool) -> None:
-    """Flip :data:`UPDATE_APPLIED_NEW_CODE` from the update flow (module-level so atexit sees it)."""
-    global UPDATE_APPLIED_NEW_CODE
-    UPDATE_APPLIED_NEW_CODE = bool(value)
-
 
 def _try_call(fn, log_message: str, *log_args, default=None):
     """``fn()``, or *default* after logging the exception at debug (``log_message`` gets ``*log_args, exc``)."""
@@ -1371,62 +1358,20 @@ def _resume_windows_services(token: dict) -> None:
         print("\n  ✓ Restarted Windows gateway service(s): " + ", ".join(restarted_services))
 
 
-def _scheduled_task_name_for_profile(profile: str) -> str:
-    """Task-Scheduler task name for a profile gateway (default: ``Hermes_Gateway``)."""
-    from hermes_cli import gateway_windows
-    base = gateway_windows._TASK_NAME_DEFAULT
-    return base if (not profile or profile == "default") else f"{base}_{profile}"
-
-
-def _relaunch_gateway_via_scheduled_task(profile: str, old_pid: int) -> bool:
-    """Relaunch a profile gateway through its registered Scheduled Task; True on success.
-
-    ``schtasks /run`` hands the launch to Task Scheduler, which spawns the gateway OUTSIDE the
-    updater's Job Object - the only reliable escape when the parent job denies
-    CREATE_BREAKAWAY_FROM_JOB (the #48820 teardown kill). The task is the same durable path the
-    gateway already uses at login/reboot (``Hermes_Gateway.cmd``). Returns False when the task is
-    not registered or /run fails, so the caller can fall back to an in-process spawn.
-    """
-    if sys.platform != "win32":
-        return False
-    from hermes_cli import gateway_windows
-    task_name = _scheduled_task_name_for_profile(profile)
-    try:
-        code, _out, _err = gateway_windows._exec_schtasks(["/Query", "/TN", task_name])
-    except Exception as exc:
-        logger.debug("Could not query scheduled task %s: %s", task_name, exc)
-        return False
-    if code != 0:
-        logger.debug("Scheduled task %s not registered; falling back to direct spawn", task_name)
-        return False
-    try:
-        code, out, err = gateway_windows._exec_schtasks(["/Run", "/TN", task_name])
-    except Exception as exc:
-        logger.warning("schtasks /run %s raised: %s", task_name, exc)
-        return False
-    if code != 0:
-        logger.warning("schtasks /run %s failed (code %s): %s", task_name, code, (err or out or "").strip())
-        return False
-    logger.info("Relaunched Windows gateway profile %s via scheduled task %s", profile, task_name)
-    return True
-
-
 def _relaunch_paused_gateways(profiles: dict, unmapped: list) -> tuple[dict, list]:
     """Spawn the restart watcher for each paused profile gateway and unmapped argv; ``(launched
     profiles, launched unmapped entries)``. Nothing leaves the token here: a watcher only proves a
     relaunch was scheduled, so every entry stays owed until ITS gateway is verified ready."""
+    from hermes_cli.update_cmd_windows_fork import relaunch_profile_gateway
     with _abort_on_error("Could not load Windows gateway restart helper"):
         from hermes_cli.gateway import launch_detached_gateway_restart_by_cmdline, launch_detached_profile_gateway_restart
 
     # An exception from a launch (incl. bad pid/argv coercion) logs at debug and reads as a failed relaunch.
     launched = {}
     for profile, old_pid in sorted(profiles.items()):
-        def _relaunch_one(p=profile, o=old_pid) -> bool:
-            # Preferred: the Scheduled Task spawns outside the updater's Job Object so the gateway
-            # survives updater teardown (#48820; the updater's job denies breakaway). Fall back to
-            # the watcher-based restart (tries CREATE_BREAKAWAY_FROM_JOB) for missing tasks.
-            return _relaunch_gateway_via_scheduled_task(str(p), int(o)) or launch_detached_profile_gateway_restart(str(p), int(o))
-        if _try_call(_relaunch_one,
+        # Fork: prefer the Scheduled Task relaunch (spawns outside the updater's Job Object,
+        # #48820); fall back to the watcher-based restart for missing tasks.
+        if _try_call(lambda p=profile, o=old_pid: relaunch_profile_gateway(str(p), int(o)),
                      "Could not restart Windows gateway profile %s after update: %s", profile):
             launched[str(profile)] = int(old_pid)
     launched_unmapped = []
@@ -1589,8 +1534,8 @@ def _verify_relaunched_gateways_alive(token: dict, profiles: dict, unmapped: lis
     Vouched PIDs are persisted so a death AFTER updater exit is reported by the next CLI invocation."""
     with _abort_on_error("Could not load Windows gateway liveness helpers"):
         from gateway.status import _pid_exists
-        from hermes_cli.profiles import get_profile_dir
         from hermes_cli import gateway_windows
+        from hermes_cli.profiles import get_profile_dir
     deadline = _time.monotonic() + _relaunch_verify_timeout_s(profiles, unmapped, _pid_exists)
     taken: set = set()
     # Profiles first: a gateway on a profile's home is that profile's, never an unmapped entry's.
@@ -1625,14 +1570,7 @@ def _verify_relaunched_gateways_alive(token: dict, profiles: dict, unmapped: lis
 
 
 def _resume_windows_gateways_after_update(token: dict | None) -> None:
-    """Restart Windows profile gateways previously paused for update.
-
-    Never raises: this is also registered as an atexit callback, so a gateway-relaunch failure is
-    logged with the recover hint and returned - the process exit code must reflect the UPDATE
-    result only (#48820). When :data:`UPDATE_APPLIED_NEW_CODE` is False (failed fetch / pre-fetch
-    abort) the impl skips post-update-only handling (launcher refresh, cold-start) and just
-    restores gateways THIS updater paused, job-proof via the Scheduled Task.
-    """
+    """Restart Windows profile gateways previously paused for update."""
     from hermes_cli.update_cmd import _m
     if not token or not token.get("resume_needed"):
         return

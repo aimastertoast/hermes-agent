@@ -132,6 +132,18 @@ else:
         globals()[_name] = _value
 
 
+# The fork's Windows-only update gate (``UPDATE_APPLIED_NEW_CODE`` /
+# ``_set_update_applied_new_code``) moved to the fork-owned
+# ``update_cmd_windows_fork`` module. ``update_cmd.py`` imports
+# ``_set_update_applied_new_code`` from HERE, so re-export the real function
+# (the loop above copies ``update_cmd_windows``'s surface, which no longer has
+# it, and the ``__getattr__`` fallback below would degrade it to a no-op stub).
+try:
+    from hermes_cli.update_cmd_windows_fork import _set_update_applied_new_code
+except ImportError:
+    pass  # __getattr__ returns a no-op stub; the gate is set-but-never-read anyway
+
+
 def __getattr__(name: str):
     """Resolve a Windows-lifecycle symbol that upstream renamed or removed.
 
