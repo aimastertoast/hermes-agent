@@ -183,6 +183,29 @@ GROUP_EXTERNAL_WRITES_TARGET = "apps/desktop/src/plugins/hermes-bots/group-exter
 GROUP_EXTERNAL_WRITES_MAX_ADDED = 10
 GROUP_EXTERNAL_WRITES_MAX_DELETED = 1
 
+# The font pickers' settings scope. The fork's scoped read and write live in
+# ``apps/desktop/src/app/hooks/use-config-record-fork.ts``: the pickers keep
+# upstream's bytes, and only two lines change -- the import path, and the
+# cache-write call, which now passes the read origin so the record lands in
+# the row of the profile it was READ from even if the scope moved on while
+# the save was in flight. Their two test files change only the module they
+# mock.
+CHAT_FONT_SETTING_TARGET = "apps/desktop/src/app/settings/chat-font-setting.tsx"
+CHAT_FONT_SETTING_MAX_ADDED = 2
+CHAT_FONT_SETTING_MAX_DELETED = 2
+
+TERMINAL_FONT_SETTING_TARGET = "apps/desktop/src/app/settings/terminal-font-setting.tsx"
+TERMINAL_FONT_SETTING_MAX_ADDED = 2
+TERMINAL_FONT_SETTING_MAX_DELETED = 2
+
+CHAT_FONT_SETTING_TEST_TARGET = "apps/desktop/src/app/settings/chat-font-setting.test.tsx"
+CHAT_FONT_SETTING_TEST_MAX_ADDED = 1
+CHAT_FONT_SETTING_TEST_MAX_DELETED = 1
+
+TERMINAL_FONT_SETTING_TEST_TARGET = "apps/desktop/src/app/settings/terminal-font-setting.test.tsx"
+TERMINAL_FONT_SETTING_TEST_MAX_ADDED = 1
+TERMINAL_FONT_SETTING_TEST_MAX_DELETED = 1
+
 # The budget. Every line here is a line upstream has to collide with.
 MAX_ADDED = 70
 # update_cmd.py is NOT listed ``merge=union`` (see .gitattributes for the measured reason:
@@ -707,6 +730,14 @@ _MIGRATED_DELTA_BUDGETS = (
      "a fork-owned module next to the gateway"),
     (GROUP_EXTERNAL_WRITES_TARGET, GROUP_EXTERNAL_WRITES_MAX_ADDED, GROUP_EXTERNAL_WRITES_MAX_DELETED,
      "apps/desktop/src/plugins/hermes-bots/routing.ts"),
+    (CHAT_FONT_SETTING_TARGET, CHAT_FONT_SETTING_MAX_ADDED, CHAT_FONT_SETTING_MAX_DELETED,
+     "apps/desktop/src/app/hooks/use-config-record-fork.ts"),
+    (TERMINAL_FONT_SETTING_TARGET, TERMINAL_FONT_SETTING_MAX_ADDED, TERMINAL_FONT_SETTING_MAX_DELETED,
+     "apps/desktop/src/app/hooks/use-config-record-fork.ts"),
+    (CHAT_FONT_SETTING_TEST_TARGET, CHAT_FONT_SETTING_TEST_MAX_ADDED, CHAT_FONT_SETTING_TEST_MAX_DELETED,
+     "apps/desktop/src/app/hooks/use-config-record-fork.ts"),
+    (TERMINAL_FONT_SETTING_TEST_TARGET, TERMINAL_FONT_SETTING_TEST_MAX_ADDED, TERMINAL_FONT_SETTING_TEST_MAX_DELETED,
+     "apps/desktop/src/app/hooks/use-config-record-fork.ts"),
 )
 
 
@@ -769,5 +800,7 @@ def test_fork_modules_exist() -> None:
         "tests/gateway/test_reconnect_lock_fork.py",
         "tests/gateway/test_status_inline_source_fork.py",
         "apps/desktop/electron/updater/checkout-source-fork.test.ts",
+        "apps/desktop/src/app/hooks/use-config-record-fork.ts",
+        "apps/desktop/src/app/hooks/use-config-record-fork.test.tsx",
     ):
         assert (REPO / path).is_file(), f"{path} is missing: the fork's call sites point at it"
