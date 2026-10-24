@@ -141,6 +141,10 @@ MIGRATED_TO_FORK_OWNED = (
     "apps/desktop/src/plugins/hermes-bots/group-compress.test.tsx",
     "apps/desktop/src/plugins/hermes-bots/group-turns.ts",
     "apps/desktop/src/plugins/hermes-bots/group-test-utils.ts",
+    # update routes (upstream's busiest router; the fork's routes now shadow it
+    # from hermes_cli/web_routers/actions_fork.py, so upstream's file is
+    # byte-identical again)
+    "hermes_cli/web_routers/actions.py",
 )
 
 

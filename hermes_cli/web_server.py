@@ -785,10 +785,16 @@ from hermes_cli.web_routers import (
     delegation as _delegation_routes,
 )
 
+# The fork's own update routes (hermes_cli/web_routers/actions_fork.py) shadow
+# upstream's update routes: mounted FIRST, they win the shared paths. Kept as a
+# standalone import so a union merge that duplicates it stays a harmless rebinding.
+from hermes_cli.web_routers import actions_fork as _actions_fork_routes
+
 app.include_router(_files_routes.router)
 app.include_router(_git_routes.router)
 app.include_router(_local_models_routes.router)
 app.include_router(_status_routes.router)
+app.include_router(_actions_fork_routes.router)
 app.include_router(_actions_routes.router)
 app.include_router(_audio_routes.router)
 app.include_router(_display_routes.router)

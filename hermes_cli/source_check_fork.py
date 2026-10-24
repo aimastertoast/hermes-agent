@@ -227,7 +227,7 @@ def _check_branch(result: dict, co, selected_branch: str, *,
 
 
 @contextmanager
-def _fork_branch_check():
+def fork_branch_check():
     """Run one check with the fork's branch check in place of upstream's.
 
     The swap is scoped to the call and guarded by a reference count: upstream's
@@ -268,7 +268,7 @@ def check_for_updates(**kwargs) -> dict:
     ``passive``, ``git``); they are passed straight through, so an argument
     upstream adds later works here without a change.
     """
-    with _fork_branch_check():
+    with fork_branch_check():
         return source_check.check_for_updates(**kwargs)
 
 
@@ -281,7 +281,7 @@ def main() -> None:
     ``--set-channel`` handling and the JSON on stdout stay upstream's own; only
     the branch check is swapped, and only for this process's one check.
     """
-    with _fork_branch_check():
+    with fork_branch_check():
         source_check.main()
 
 

@@ -80,6 +80,7 @@ docker/entrypoint.sh text eol=lf
 /hermes_cli/update_contract.py merge=union
 /hermes_cli/update_windows_acl.py merge=union
 /hermes_cli/venv_sync.py merge=union
+/hermes_cli/web_server.py merge=union
 /scripts/desktop-update/windows.ps1 merge=union
 /tests/gateway/test_gateway_command_line_matcher.py merge=union
 /tests/hermes_cli/test_source_channel_integration.py merge=union

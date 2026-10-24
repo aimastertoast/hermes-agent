@@ -75,10 +75,19 @@ DESKTOP_SOURCE_PROBE_MAX_DELETED = 2
 # The receipt endpoint's route lives in upstream's ``web_routers/actions.py``.
 # The fork's part is the profile-scoped read plus the acknowledge route; the
 # readers themselves live in the fork-owned ``hermes_cli/update_receipt_fork.py``.
-# The budget is the measured delta, so the route cannot grow back.
+# The fork's own router (``hermes_cli/web_routers/actions_fork.py``) now SHADOWS
+# upstream's, so this file must carry NO fork delta at all.
 ACTIONS_ROUTER_TARGET = "hermes_cli/web_routers/actions.py"
-ACTIONS_ROUTER_MAX_ADDED = 103
-ACTIONS_ROUTER_MAX_DELETED = 15
+ACTIONS_ROUTER_MAX_ADDED = 0
+ACTIONS_ROUTER_MAX_DELETED = 0
+
+# ``hermes_cli/web_server.py`` mounts the fork's router BEFORE upstream's so the
+# fork's routes win their shared paths. Those mount lines are the fork's ONLY
+# footprint in the file (a standalone import + one include, so a union merge
+# that duplicates them stays a harmless rebinding / double mount).
+WEB_SERVER_TARGET = "hermes_cli/web_server.py"
+WEB_SERVER_MAX_ADDED = 6
+WEB_SERVER_MAX_DELETED = 0
 
 # ``hermes_cli/venv_sync.py`` is upstream's launch path, and the fork adds ONE
 # call there: the Desktop's own commands leave an owed completion tail to
@@ -415,11 +424,12 @@ def test_desktop_updates_store_fork_delta_stays_within_budget() -> None:
 
 
 def test_actions_router_fork_delta_stays_within_budget() -> None:
-    """The receipt route's fork delta must not grow back.
+    """The update routes must stay out of the upstream-owned router.
 
-    ``hermes_cli/web_routers/actions.py`` is upstream's file. The fork's part
-    is the profile-scoped receipt read plus the acknowledge route; the readers
-    live in the fork-owned ``hermes_cli/update_receipt_fork.py``.
+    ``hermes_cli/web_routers/actions.py`` is upstream's file, and one of the files
+    upstream rewrites most. The fork's routes live in the fork-owned
+    ``hermes_cli/web_routers/actions_fork.py``, which SHADOWS upstream's by being
+    mounted first -- so this file must carry no fork lines at all.
     """
     delta = _fork_delta(ACTIONS_ROUTER_TARGET)
     if delta is None:
@@ -428,12 +438,39 @@ def test_actions_router_fork_delta_stays_within_budget() -> None:
     assert deleted <= ACTIONS_ROUTER_MAX_DELETED, (
         f"{ACTIONS_ROUTER_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
         f"(budget {ACTIONS_ROUTER_MAX_DELETED}). Every deleted line is a line upstream has to "
-        f"restore in the same hunk to collide."
+        f"restore in the same hunk to collide. Move the fork's code into "
+        f"hermes_cli/web_routers/actions_fork.py."
     )
     assert added <= ACTIONS_ROUTER_MAX_ADDED, (
         f"{ACTIONS_ROUTER_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
-        f"(budget {ACTIONS_ROUTER_MAX_ADDED}). Move new code into a fork-owned module "
-        f"(e.g. hermes_cli/update_receipt_fork.py) and leave a call site behind."
+        f"(budget {ACTIONS_ROUTER_MAX_ADDED}). Move the fork's routes into "
+        f"hermes_cli/web_routers/actions_fork.py and leave the upstream file untouched."
+    )
+
+
+def test_web_server_fork_delta_stays_within_budget() -> None:
+    """The router mount must stay a pure insertion of the fork's own router.
+
+    ``hermes_cli/web_server.py`` is upstream's file. The fork mounts its own
+    router BEFORE upstream's (so the fork's routes win their shared paths) --
+    that mount is the fork's only footprint here. Every added line is a hunk
+    upstream has to edit in the same place to collide, so the budget is the
+    measured delta: the mount cannot grow back.
+    """
+    delta = _fork_delta(WEB_SERVER_TARGET)
+    if delta is None:
+        pytest.skip("no upstream ref to measure the fork's delta against")
+    added, deleted = delta
+    assert deleted <= WEB_SERVER_MAX_DELETED, (
+        f"{WEB_SERVER_TARGET}: the fork now DELETES {deleted} line(s) of upstream's file "
+        f"(budget {WEB_SERVER_MAX_DELETED}). Every deleted line is a line upstream has to "
+        f"restore in the same hunk to collide."
+    )
+    assert added <= WEB_SERVER_MAX_ADDED, (
+        f"{WEB_SERVER_TARGET}: the fork now ADDS {added} line(s) to upstream's file "
+        f"(budget {WEB_SERVER_MAX_ADDED}). The fork's whole footprint here is the import "
+        f"and the include of hermes_cli/web_routers/actions_fork.py -- anything more belongs "
+        f"in that fork-owned module."
     )
 
 
@@ -522,6 +559,8 @@ def test_fork_modules_exist() -> None:
         "hermes_cli/source_check_fork.py",
         "hermes_cli/update_desktop_tail.py",
         "hermes_cli/update_acl_fast.py",
+        "hermes_cli/web_routers/actions_fork.py",
+        "tests/hermes_cli/test_actions_fork_routes.py",
         "tests/hermes_cli/test_source_check_fork.py",
         "tests/hermes_cli/test_update_desktop_tail.py",
         "tests/hermes_cli/test_update_acl_fast.py",
