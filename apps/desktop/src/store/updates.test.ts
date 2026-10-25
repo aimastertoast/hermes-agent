@@ -117,10 +117,10 @@ const {
   startUpdatePoller,
   stopUpdatePoller,
   $updateStatus,
-  $updateSafeModeAuto,
-  $updateAllowLocalAhead,
   BACKGROUND_UPDATE_CHECK_MS
 } = await import('./updates')
+
+const { $updateAllowLocalAhead } = await import('./updates-fork')
 
 const { CANONICAL_GATEWAY_PROTOCOL } = await import('@/api/canonical-protocol')
 const { setConnection } = await import('./session')
@@ -1928,37 +1928,16 @@ describe('updates settings atoms', () => {
     // NEXT set(). But the in-memory value persists across clears — reset
     // each atom explicitly so a previous test's set() can't poison the
     // default-value assertions below.
-    $updateSafeModeAuto.set(false)
     $updateAllowLocalAhead.set(false)
-  })
-
-  it('$updateSafeModeAuto defaults to false', () => {
-    expect($updateSafeModeAuto.get()).toBe(false)
   })
 
   it('$updateAllowLocalAhead defaults to false', () => {
     expect($updateAllowLocalAhead.get()).toBe(false)
   })
 
-  it('setting $updateSafeModeAuto persists', () => {
-    $updateSafeModeAuto.set(true)
-    expect($updateSafeModeAuto.get()).toBe(true)
-    // The change must be readable back via the persistent storage the atom
-    // writes through, not just the in-memory snapshot — a reload that does
-    // not persist the toggle would silently re-disable it on every boot.
-    expect(storage.get('hermes.update.safeModeAuto')).toBe('true')
-  })
-
   it('setting $updateAllowLocalAhead persists', () => {
     $updateAllowLocalAhead.set(true)
     expect($updateAllowLocalAhead.get()).toBe(true)
     expect(storage.get('hermes.update.allowLocalAhead')).toBe('true')
-  })
-
-  it('flipping $updateSafeModeAuto back to false persists the cleared state', () => {
-    $updateSafeModeAuto.set(true)
-    $updateSafeModeAuto.set(false)
-    expect($updateSafeModeAuto.get()).toBe(false)
-    expect(storage.get('hermes.update.safeModeAuto')).toBe('false')
   })
 })

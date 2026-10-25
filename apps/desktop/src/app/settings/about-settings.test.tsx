@@ -49,10 +49,9 @@ vi.mock('@/store/updates', async (): Promise<Record<string, unknown>> => {
     $updateApply: atom<UpdateApplyState>(idle),
     $updateChecking: atom<boolean>(false),
     $updateStatus: atom<DesktopUpdateStatus | null>(null),
-    // UpdatesSettings renders inside AboutSettings and reads these atoms
-    // (task 12). The toggle panel only displays them — defaults are fine here.
-    $updateAllowLocalAhead: atom<boolean>(false),
-    $updateSafeModeAuto: atom<boolean>(false),
+    // UpdatesSettings renders inside AboutSettings. It reads its toggle
+    // atom from the fork-owned '@/store/updates-fork' (not mocked here), so
+    // the defaults below are enough.
     checkBackendUpdates: vi.fn<() => Promise<DesktopUpdateStatus | null>>().mockResolvedValue(null),
     checkUpdates: vi.fn<() => Promise<DesktopUpdateStatus | null>>().mockResolvedValue(null),
     refreshDesktopVersion: vi.fn<() => Promise<DesktopVersionInfo | null>>().mockResolvedValue(null),

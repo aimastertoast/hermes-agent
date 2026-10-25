@@ -2,10 +2,10 @@
  * Fork-owned additions to the desktop update store.
  *
  * `store/updates.ts` is upstream-owned and rewritten often, so the fork's
- * behaviour lives here: upstream's file only re-exports the two toggle atoms
- * (every existing consumer keeps importing them from `@/store/updates`) and
- * calls the relaunch helper at the two points where an in-place update can
- * leave the running renderer on a stale bundle.
+ * behaviour lives here: upstream's file stays free of fork-local blocks (it
+ * only calls the relaunch helper at the two points where an in-place update
+ * can leave the running renderer on a stale bundle), and consumers import the
+ * fork's atoms from this module directly.
  */
 
 import { Codecs, persistentAtom } from '@/lib/persisted'
@@ -18,12 +18,6 @@ import { $connection } from '@/store/session'
 // user preference on each invoke. The durable update receipt is NOT here: it
 // lives in the fork-owned store/update-receipt-fork.ts, because the receipt's
 // acknowledged state is a per-receipt fact the server owns.
-
-/** When true, the orchestrator's auto-classifier may run `hermes update`
- *  unattended for changes it can prove safe (no user code touched). Default
- *  off: the user must opt in once. Persisted — the orchestrator reads it on
- *  every invoke. */
-export const $updateSafeModeAuto = persistentAtom<boolean>('hermes.update.safeModeAuto', false, Codecs.bool)
 
 /** When true, force the update to proceed past the
  *  ``LOCAL_AHEAD_REFUSAL`` gate (the user's local checkout has commits that

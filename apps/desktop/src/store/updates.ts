@@ -61,11 +61,6 @@ export const $updateChecking = atom<boolean>(false)
 export const $updateOverlayOpen = atom<boolean>(false)
 export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
 
-// The fork's update-settings atoms live in the fork-owned store/updates-fork.ts
-// (upstream rewrites this file often). Re-exported here so every existing
-// consumer keeps importing them from `@/store/updates`.
-export { $updateAllowLocalAhead, $updateSafeModeAuto } from '@/store/updates-fork'
-
 // Client and backend are independently updatable; each keeps its own state.
 export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)
 export const $backendUpdateApply = atom<UpdateApplyState>(IDLE)

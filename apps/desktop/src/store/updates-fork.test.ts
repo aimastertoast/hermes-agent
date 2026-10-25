@@ -22,7 +22,6 @@ vi.mock('@/store/session', () => ({ $connection: $mockConnection }))
 
 const {
   $updateAllowLocalAhead,
-  $updateSafeModeAuto,
   relaunchIfBundleStaleAfterInPlaceUpdate,
   requestDesktopRelaunch
 } = await import('./updates-fork')
@@ -122,13 +121,10 @@ describe('updates-fork: requestDesktopRelaunch', () => {
 
 describe('updates-fork: settings atoms', () => {
   it('default to off and persist through the storage choke point', () => {
-    expect($updateSafeModeAuto.get()).toBe(false)
     expect($updateAllowLocalAhead.get()).toBe(false)
 
-    $updateSafeModeAuto.set(true)
     $updateAllowLocalAhead.set(true)
 
-    expect(storage.get('hermes.update.safeModeAuto')).toBe('true')
     expect(storage.get('hermes.update.allowLocalAhead')).toBe('true')
   })
 })

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { $updateAllowLocalAhead, $updateSafeModeAuto } from '@/store/updates'
+import { $updateAllowLocalAhead } from '@/store/updates-fork'
 
 import { UpdatesSettings } from './updates-settings'
 
@@ -51,29 +51,27 @@ function createMockAtom<T>(initial: T): MockAtom<T> {
 }
 
 const atoms = vi.hoisted(() => ({
-  $mockSafeMode: createMockAtom(false),
   $mockAllowLocalAhead: createMockAtom(false)
 }))
 
 const mocks = vi.hoisted(() => ({
   notifyError: vi.fn(),
-  saveUpdateSettings: vi.fn((_toggles: { allowLocalAhead: boolean; safeModeAuto: boolean }) => Promise.resolve({ ok: true }))
+  saveUpdateSettings: vi.fn((_toggles: { allowLocalAhead: boolean }) => Promise.resolve({ ok: true }))
 }))
 
 vi.mock('@/api/update-settings', () => ({
-  saveUpdateSettings: (toggles: { allowLocalAhead: boolean; safeModeAuto: boolean }) => mocks.saveUpdateSettings(toggles)
+  saveUpdateSettings: (toggles: { allowLocalAhead: boolean }) => mocks.saveUpdateSettings(toggles)
 }))
 
 vi.mock('@/store/notifications', () => ({
   notifyError: (...args: unknown[]) => mocks.notifyError(...args)
 }))
 
-vi.mock('@/store/updates', async (): Promise<Record<string, unknown>> => {
-  const actual = await import('@/store/updates')
+vi.mock('@/store/updates-fork', async (): Promise<Record<string, unknown>> => {
+  const actual = await import('@/store/updates-fork')
 
   return {
     ...actual,
-    $updateSafeModeAuto: atoms.$mockSafeMode,
     $updateAllowLocalAhead: atoms.$mockAllowLocalAhead
   }
 })
@@ -81,59 +79,53 @@ vi.mock('@/store/updates', async (): Promise<Record<string, unknown>> => {
 describe('UpdatesSettings', (): void => {
   afterEach((): void => {
     cleanup()
-    atoms.$mockSafeMode.set(false)
     atoms.$mockAllowLocalAhead.set(false)
     mocks.saveUpdateSettings.mockClear()
     mocks.notifyError.mockClear()
   })
 
-  it('renders both update-mode toggles with the persisted labels', (): void => {
+  it('renders the update-mode toggle with the persisted label', (): void => {
     render(<UpdatesSettings />)
 
     expect(screen.getByRole('heading', { name: 'Update behavior' })).toBeTruthy()
-    expect(screen.getByRole('switch', { name: 'Auto-apply safe updates' })).toBeTruthy()
     expect(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })).toBeTruthy()
-    expect($updateSafeModeAuto.get()).toBe(false)
     expect($updateAllowLocalAhead.get()).toBe(false)
   })
 
+  it('does not offer the auto-apply safe-updates switch', (): void => {
+    // The switch was removed: nothing ever consumed the persisted
+    // `safe_mode_auto` flag, so flipping it only ever looked like a broken
+    // updater. Its absence is the contract now.
+    render(<UpdatesSettings />)
+
+    expect(screen.queryByRole('switch', { name: 'Auto-apply safe updates' })).toBeNull()
+    expect(screen.queryByText(/auto-apply/i)).toBeNull()
+  })
+
   it('reflects the atom value so a non-default initial state renders checked', (): void => {
-    atoms.$mockSafeMode.set(true)
-    atoms.$mockAllowLocalAhead.set(false)
+    atoms.$mockAllowLocalAhead.set(true)
     render(<UpdatesSettings />)
 
-    const safe = screen.getByRole('switch', { name: 'Auto-apply safe updates' })
     const allowAhead = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
 
-    expect(safe.getAttribute('aria-checked')).toBe('true')
+    expect(allowAhead.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('clicking the allow-local-ahead toggle flips the atom value', (): void => {
+    render(<UpdatesSettings />)
+
+    const allowAhead = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
     expect(allowAhead.getAttribute('aria-checked')).toBe('false')
-  })
 
-  it('clicking the safe-mode toggle flips the atom value', (): void => {
-    render(<UpdatesSettings />)
-
-    const safe = screen.getByRole('switch', { name: 'Auto-apply safe updates' })
-    expect(safe.getAttribute('aria-checked')).toBe('false')
-
-    fireEvent.click(safe)
-
-    expect($updateSafeModeAuto.get()).toBe(true)
-    expect(safe.getAttribute('aria-checked')).toBe('true')
-
-    fireEvent.click(safe)
-
-    expect($updateSafeModeAuto.get()).toBe(false)
-    expect(safe.getAttribute('aria-checked')).toBe('false')
-  })
-
-  it('clicking the allow-local-ahead toggle flips its atom value without touching the other', (): void => {
-    render(<UpdatesSettings />)
-
-    const allowAhead = screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' })
     fireEvent.click(allowAhead)
 
     expect($updateAllowLocalAhead.get()).toBe(true)
-    expect($updateSafeModeAuto.get()).toBe(false)
+    expect(allowAhead.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(allowAhead)
+
+    expect($updateAllowLocalAhead.get()).toBe(false)
+    expect(allowAhead.getAttribute('aria-checked')).toBe('false')
   })
 
   it('exposes an aria-labelledby that points at the visible heading', (): void => {
@@ -147,26 +139,13 @@ describe('UpdatesSettings', (): void => {
     expect(heading.id).toBe('updates-settings-heading')
   })
 
-  it('writes both toggles to the backend when one is flipped', (): void => {
+  it('writes the toggle to the backend when it is flipped', (): void => {
     render(<UpdatesSettings />)
 
     fireEvent.click(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' }))
 
     expect(mocks.saveUpdateSettings).toHaveBeenCalledWith({
-      allowLocalAhead: true,
-      safeModeAuto: false
-    })
-  })
-
-  it('keeps the other toggle in the payload when the second one is flipped', (): void => {
-    render(<UpdatesSettings />)
-
-    fireEvent.click(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' }))
-    fireEvent.click(screen.getByRole('switch', { name: 'Auto-apply safe updates' }))
-
-    expect(mocks.saveUpdateSettings).toHaveBeenLastCalledWith({
-      allowLocalAhead: true,
-      safeModeAuto: true
+      allowLocalAhead: true
     })
   })
 
@@ -174,7 +153,7 @@ describe('UpdatesSettings', (): void => {
     mocks.saveUpdateSettings.mockImplementationOnce(() => Promise.reject(new Error('backend down')))
     render(<UpdatesSettings />)
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Auto-apply safe updates' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' }))
 
     await Promise.resolve()
     await Promise.resolve()

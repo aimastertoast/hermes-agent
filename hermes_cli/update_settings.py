@@ -1,11 +1,13 @@
 """User-facing update settings shared between the desktop GUI and CLI orchestrator.
 
-The desktop renderer persists two safety toggles (``$updateAllowLocalAhead`` and
-``$updateSafeModeAuto``) in electron-store. To make them reachable from the
+The desktop renderer persists its update-behavior toggle
+(``$updateAllowLocalAhead``) in electron-store. To make it reachable from the
 Python orchestrator (which runs as a separate process spawned by the gateway),
-an electron main-process IPC handler mirrors the current atom values to
-``HERMES_HOME/update_settings.json`` whenever the renderer toggles them. The
-Python side reads this file with :func:`load_update_settings` on every invoke.
+the renderer POSTs the current atom value to the backend route
+``POST /api/hermes/update/settings`` (see
+``hermes_cli.web_routers.actions_fork``), which mirrors it to
+``HERMES_HOME/update_settings.json``. The Python side reads this file with
+:func:`load_update_settings` on every invoke.
 
 Why a file rather than an HTTP param: the orchestrator is spawned detached by
 the gateway's ``_spawn_hermes_action`` and runs to completion asynchronously.
@@ -14,9 +16,13 @@ the orchestrator's subprocess re-execs or restarts mid-pipeline. A file on
 disk outlives the spawn and survives any subprocess handoff, at the cost of a
 single fsync on each toggle flip from the desktop.
 
-Schema is intentionally minimal — two booleans. Anything more elaborate
-belongs in the desktop's electron-store; this file is only the cross-process
-bridge.
+Schema is intentionally minimal — one boolean. Anything more elaborate belongs
+in the desktop's electron-store; this file is only the cross-process bridge.
+
+A second toggle the panel used to carry (``$updateSafeModeAuto``) was removed:
+nothing ever read the flag it persisted, so it could only ever look like a
+broken updater. Files written before the removal still carry its key; the
+reader ignores it.
 """
 from __future__ import annotations
 
@@ -50,11 +56,6 @@ class UpdateSettings:
     update can proceed past the user's unpushed local commits. The orchestrator
     creates a backup branch first; the toggle only arms the bypass, it does not
     disable the safety net."""
-
-    safe_mode_auto: bool = False
-    """``$updateSafeModeAuto`` — let the orchestrator run ``hermes update``
-    unattended when its pre/post classifier proves the change is safe. Default
-    off so the user opts in once."""
 
 
 def settings_path(home: Path) -> Path:
@@ -108,14 +109,10 @@ def load_update_settings(home: Path) -> Optional[UpdateSettings]:
         return None
 
     allow_local_ahead = _read_bool(toggles, "allow_local_ahead")
-    safe_mode_auto = _read_bool(toggles, "safe_mode_auto")
-    if allow_local_ahead is None or safe_mode_auto is None:
+    if allow_local_ahead is None:
         return None
 
-    return UpdateSettings(
-        allow_local_ahead=allow_local_ahead,
-        safe_mode_auto=safe_mode_auto,
-    )
+    return UpdateSettings(allow_local_ahead=allow_local_ahead)
 
 
 def _read_bool(container: dict, key: str) -> Optional[bool]:

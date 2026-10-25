@@ -197,16 +197,20 @@ async def acknowledge_update_receipt(receipt_id: str, profile: Optional[str] = N
 
 
 class _UpdateSettingsPayload(BaseModel):
-    """The desktop's "Update behavior" toggles.
+    """The desktop's "Update behavior" toggle.
 
     Strict booleans: a payload of ``"true"`` or ``1`` is refused rather than
-    coerced, so a malformed client can never arm the local-ahead bypass. Both
-    fields are required — the settings file is written whole, so a partial body
+    coerced, so a malformed client can never arm the local-ahead bypass. The
+    field is required — the settings file is written whole, so a partial body
     would silently reset the toggle it left out.
+
+    The auto-apply toggle the panel used to carry (``safe_mode_auto``) was
+    removed: nothing ever read it. An older renderer still posting it is
+    accepted and ignored (pydantic drops unknown fields) so the write is not
+    refused.
     """
 
     allow_local_ahead: StrictBool
-    safe_mode_auto: StrictBool
 
 
 @router.post("/api/hermes/update/settings")
@@ -230,7 +234,6 @@ async def save_update_settings(payload: _UpdateSettingsPayload):
         get_hermes_home(),
         UpdateSettings(
             allow_local_ahead=payload.allow_local_ahead,
-            safe_mode_auto=payload.safe_mode_auto,
         ),
     )
     return {"ok": True}

@@ -72,30 +72,42 @@ class TestLoadUpdateSettings:
         """Future files written by a newer desktop must not be misread."""
         payload = {
             "schema_version": SCHEMA_VERSION + 1,
-            "toggles": {"allow_local_ahead": True, "safe_mode_auto": False},
+            "toggles": {"allow_local_ahead": True},
         }
         settings_path(tmp_path).write_text(json.dumps(payload))
         assert load_update_settings(tmp_path) is None
 
-    def test_returns_defaults_when_both_toggles_false(self, tmp_path: Path) -> None:
+    def test_returns_defaults_when_toggle_false(self, tmp_path: Path) -> None:
         payload = {
             "schema_version": SCHEMA_VERSION,
-            "toggles": {"allow_local_ahead": False, "safe_mode_auto": False},
+            "toggles": {"allow_local_ahead": False},
         }
         settings_path(tmp_path).write_text(json.dumps(payload))
         settings = load_update_settings(tmp_path)
-        assert settings == UpdateSettings(allow_local_ahead=False, safe_mode_auto=False)
+        assert settings == UpdateSettings(allow_local_ahead=False)
 
     def test_returns_armed_when_toggle_true(self, tmp_path: Path) -> None:
         payload = {
             "schema_version": SCHEMA_VERSION,
-            "toggles": {"allow_local_ahead": True, "safe_mode_auto": False},
+            "toggles": {"allow_local_ahead": True},
         }
         settings_path(tmp_path).write_text(json.dumps(payload))
         settings = load_update_settings(tmp_path)
         assert settings is not None
         assert settings.allow_local_ahead is True
-        assert settings.safe_mode_auto is False
+
+    def test_ignores_the_legacy_safe_mode_auto_key(self, tmp_path: Path) -> None:
+        """The auto-apply toggle was removed, but files written before the
+        removal still carry its key. The reader must load them (the live
+        toggle is the only thing that matters) and expose no such field."""
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "toggles": {"allow_local_ahead": True, "safe_mode_auto": True},
+        }
+        settings_path(tmp_path).write_text(json.dumps(payload))
+        settings = load_update_settings(tmp_path)
+        assert settings == UpdateSettings(allow_local_ahead=True)
+        assert not hasattr(settings, "safe_mode_auto")
 
     @pytest.mark.parametrize(
         "value",
@@ -117,7 +129,7 @@ class TestLoadUpdateSettings:
         refuse non-bool values."""
         payload = {
             "schema_version": SCHEMA_VERSION,
-            "toggles": {"allow_local_ahead": value, "safe_mode_auto": False},
+            "toggles": {"allow_local_ahead": value},
         }
         settings_path(tmp_path).write_text(json.dumps(payload))
         assert load_update_settings(tmp_path) is None
@@ -129,10 +141,16 @@ class TestWriteUpdateSettings:
     def test_round_trip_preserves_values(self, tmp_path: Path) -> None:
         write_update_settings(
             tmp_path,
-            UpdateSettings(allow_local_ahead=True, safe_mode_auto=True),
+            UpdateSettings(allow_local_ahead=True),
         )
         loaded = load_update_settings(tmp_path)
-        assert loaded == UpdateSettings(allow_local_ahead=True, safe_mode_auto=True)
+        assert loaded == UpdateSettings(allow_local_ahead=True)
+
+    def test_writes_no_legacy_toggle_key(self, tmp_path: Path) -> None:
+        """The removed auto-apply toggle must not come back in the file."""
+        write_update_settings(tmp_path, UpdateSettings(allow_local_ahead=True))
+        payload = json.loads(settings_path(tmp_path).read_text(encoding="utf-8"))
+        assert "safe_mode_auto" not in payload["toggles"]
 
     def test_creates_home_directory_if_missing(self, tmp_path: Path) -> None:
         nested = tmp_path / "deep" / "home"
@@ -241,7 +259,7 @@ class TestForceRequirementToggle:
         # User arms the toggle.
         write_update_settings(
             isolated_hermes_home,
-            UpdateSettings(allow_local_ahead=True, safe_mode_auto=False),
+            UpdateSettings(allow_local_ahead=True),
         )
 
         refusal = evaluate_update_force_requirement(repo, home=isolated_hermes_home)
@@ -262,7 +280,7 @@ class TestForceRequirementToggle:
         # User arms the toggle (irrelevant to force-pushed, but tests the path).
         write_update_settings(
             isolated_hermes_home,
-            UpdateSettings(allow_local_ahead=True, safe_mode_auto=False),
+            UpdateSettings(allow_local_ahead=True),
         )
 
         refusal = evaluate_update_force_requirement(repo, home=isolated_hermes_home)
@@ -278,7 +296,7 @@ class TestForceRequirementToggle:
         # Toggle state shouldn't matter when there is nothing to gate on.
         write_update_settings(
             isolated_hermes_home,
-            UpdateSettings(allow_local_ahead=False, safe_mode_auto=False),
+            UpdateSettings(allow_local_ahead=False),
         )
         assert evaluate_update_force_requirement(repo, home=isolated_hermes_home) is None
 

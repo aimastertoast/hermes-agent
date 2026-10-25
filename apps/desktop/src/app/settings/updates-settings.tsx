@@ -5,29 +5,29 @@ import { saveUpdateSettings } from '@/api/update-settings'
 import { forkStrings } from '@/i18n/fork'
 import { SlidersHorizontal } from '@/lib/icons'
 import { notifyError } from '@/store/notifications'
-import { $updateAllowLocalAhead, $updateSafeModeAuto } from '@/store/updates'
+import { $updateAllowLocalAhead } from '@/store/updates-fork'
 
 import { SectionHeading, SettingsBreadcrumbContext, ToggleRow } from './primitives'
 
-/** Renderer-side toggles for the orchestrator's user-facing update modes
- *  (task 9 atoms). Both persist via `persistentAtom` — flipping one here
- *  survives an app restart and is what the orchestrator reads on every
- *  invoke. Defaults are off: the user must opt in once per mode. */
+/** Renderer-side toggle for the orchestrator's local-ahead bypass (task 9
+ *  atom). It persists via `persistentAtom` — flipping it here survives an app
+ *  restart and is what the orchestrator reads on every invoke. Default is off:
+ *  the user must opt in once per install.
+ *
+ *  The "Auto-apply safe updates" switch that used to sit here was removed:
+ *  nothing ever read the flag it persisted, so it could only ever look like a
+ *  broken updater. */
 export function UpdatesSettings(): ReactElement {
   const hasBreadcrumb = useContext(SettingsBreadcrumbContext)
   const u = forkStrings.updateModes
-  const safeModeAuto = useStore($updateSafeModeAuto)
   const allowLocalAhead = useStore($updateAllowLocalAhead)
 
-  // The updater that reads these toggles runs in ANOTHER process and reads
+  // The updater that reads this toggle runs in ANOTHER process and reads
   // `HERMES_HOME/update_settings.json` on every invoke, so a toggle flipped
-  // here only takes effect once it has been written there. Both toggles go
-  // out together — the file is read whole, so flipping one must not reset
-  // the other to its default.
+  // here only takes effect once it has been written there.
   const persistToggles = (): void => {
     void saveUpdateSettings({
-      allowLocalAhead: $updateAllowLocalAhead.get(),
-      safeModeAuto: $updateSafeModeAuto.get()
+      allowLocalAhead: $updateAllowLocalAhead.get()
     }).catch((error: unknown) => {
       notifyError(error, u.saveFailed)
     })
@@ -40,16 +40,6 @@ export function UpdatesSettings(): ReactElement {
         <h2 className="sr-only" id="updates-settings-heading">
           {u.title}
         </h2>
-        <ToggleRow
-          checked={safeModeAuto}
-          description={u.safeModeAutoDescription}
-          id="update-safe-mode-auto"
-          label={u.safeModeAutoLabel}
-          onChange={next => {
-            $updateSafeModeAuto.set(next)
-            persistToggles()
-          }}
-        />
         <ToggleRow
           checked={allowLocalAhead}
           description={u.allowLocalAheadDescription}
