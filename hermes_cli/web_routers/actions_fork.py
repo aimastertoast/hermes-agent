@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter
+from pydantic import BaseModel, StrictBool
 
 from hermes_cli import source_check_fork
 from hermes_cli import update_contract
@@ -193,3 +194,43 @@ async def acknowledge_update_receipt(receipt_id: str, profile: Optional[str] = N
         except Exception:
             ok = False
     return {"ok": ok}
+
+
+class _UpdateSettingsPayload(BaseModel):
+    """The desktop's "Update behavior" toggles.
+
+    Strict booleans: a payload of ``"true"`` or ``1`` is refused rather than
+    coerced, so a malformed client can never arm the local-ahead bypass. Both
+    fields are required — the settings file is written whole, so a partial body
+    would silently reset the toggle it left out.
+    """
+
+    allow_local_ahead: StrictBool
+    safe_mode_auto: StrictBool
+
+
+@router.post("/api/hermes/update/settings")
+async def save_update_settings(payload: _UpdateSettingsPayload):
+    """Persist the renderer's update-behavior toggles for the orchestrator.
+
+    The orchestrator runs as a separate spawned process and reads
+    ``HERMES_HOME/update_settings.json`` on every invoke, so that file is the
+    only channel that reaches it. The renderer kept the toggles in its own
+    local storage instead, which left ``hermes_cli.update_settings`` with a
+    writer and no callers — and the gate the toggles arm (the local-ahead
+    refusal) unreachable from the UI.
+
+    Not profile-scoped: the toggles configure the INSTALL's updater, and the
+    orchestrator reads the home of the install it updates — not a profile's.
+    """
+    from hermes_constants import get_hermes_home
+    from hermes_cli.update_settings import UpdateSettings, write_update_settings
+
+    write_update_settings(
+        get_hermes_home(),
+        UpdateSettings(
+            allow_local_ahead=payload.allow_local_ahead,
+            safe_mode_auto=payload.safe_mode_auto,
+        ),
+    )
+    return {"ok": True}

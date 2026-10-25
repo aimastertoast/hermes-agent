@@ -21,6 +21,7 @@ export interface ForkUpdateModeStrings {
   safeModeAutoDescription: string
   allowLocalAheadLabel: string
   allowLocalAheadDescription: string
+  saveFailed: string
 }
 
 export interface ForkUpdateReceiptStrings {
@@ -47,7 +48,8 @@ export const forkStrings: ForkStrings = {
       'When enabled, updates that don’t change your schema, config, or MCP servers are applied automatically.',
     allowLocalAheadLabel: 'Allow Update Now when local is ahead',
     allowLocalAheadDescription:
-      'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).'
+      'By default, Update Now is disabled when your checkout has commits not yet in upstream. Enable this to proceed (a backup branch is created automatically).',
+    saveFailed: 'Could not save the update settings — the updater will not see this change.'
   },
   updateReceipt: {
     // The placeholders match the orchestrator receipt shape, so the overlay

@@ -55,6 +55,19 @@ const atoms = vi.hoisted(() => ({
   $mockAllowLocalAhead: createMockAtom(false)
 }))
 
+const mocks = vi.hoisted(() => ({
+  notifyError: vi.fn(),
+  saveUpdateSettings: vi.fn((_toggles: { allowLocalAhead: boolean; safeModeAuto: boolean }) => Promise.resolve({ ok: true }))
+}))
+
+vi.mock('@/api/update-settings', () => ({
+  saveUpdateSettings: (toggles: { allowLocalAhead: boolean; safeModeAuto: boolean }) => mocks.saveUpdateSettings(toggles)
+}))
+
+vi.mock('@/store/notifications', () => ({
+  notifyError: (...args: unknown[]) => mocks.notifyError(...args)
+}))
+
 vi.mock('@/store/updates', async (): Promise<Record<string, unknown>> => {
   const actual = await import('@/store/updates')
 
@@ -70,6 +83,8 @@ describe('UpdatesSettings', (): void => {
     cleanup()
     atoms.$mockSafeMode.set(false)
     atoms.$mockAllowLocalAhead.set(false)
+    mocks.saveUpdateSettings.mockClear()
+    mocks.notifyError.mockClear()
   })
 
   it('renders both update-mode toggles with the persisted labels', (): void => {
@@ -130,5 +145,40 @@ describe('UpdatesSettings', (): void => {
     expect(section).toBeTruthy()
     expect(section?.getAttribute('aria-labelledby')).toBe(heading.id)
     expect(heading.id).toBe('updates-settings-heading')
+  })
+
+  it('writes both toggles to the backend when one is flipped', (): void => {
+    render(<UpdatesSettings />)
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' }))
+
+    expect(mocks.saveUpdateSettings).toHaveBeenCalledWith({
+      allowLocalAhead: true,
+      safeModeAuto: false
+    })
+  })
+
+  it('keeps the other toggle in the payload when the second one is flipped', (): void => {
+    render(<UpdatesSettings />)
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Allow Update Now when local is ahead' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Auto-apply safe updates' }))
+
+    expect(mocks.saveUpdateSettings).toHaveBeenLastCalledWith({
+      allowLocalAhead: true,
+      safeModeAuto: true
+    })
+  })
+
+  it('surfaces a failed write instead of leaving the toggle silently unsaved', async (): Promise<void> => {
+    mocks.saveUpdateSettings.mockImplementationOnce(() => Promise.reject(new Error('backend down')))
+    render(<UpdatesSettings />)
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Auto-apply safe updates' }))
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mocks.notifyError).toHaveBeenCalledWith(expect.any(Error), expect.any(String))
   })
 })
