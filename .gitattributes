@@ -125,10 +125,16 @@ docker/entrypoint.sh text eol=lf
 # * ``apps/desktop/electron/updater/checkout-source.ts`` -- the fork's block rewrites the
 #   argv upstream builds. Union would merge it in silently, so an upstream rename of that
 #   argv becomes a broken desktop build instead of a loud conflict.
-# * ``apps/desktop/src/plugins/hermes-bots/group-external-writes.ts`` -- the one remaining
-#   deletion is upstream's multi-line call, whose argument genuinely changed.
 # * ``hermes_cli/update_cmd_windows.py`` -- the fork's delta is a pure insertion (the fork's
 #   relaunch is bound over upstream's local name, so upstream's call line is byte-identical),
 #   but the binding only takes effect while upstream's lambda still calls that name. An
 #   upstream RENAME would leave the fork's Scheduled-Task relaunch bound to a name nobody
 #   calls -- the #48820 teardown kill would silently return. A loud conflict is better.
+#
+# ``apps/desktop/src/plugins/hermes-bots/group-external-writes.ts`` was the last file with
+# a fork delta that REMOVED an upstream line (the sweep's resume call, whose argument
+# genuinely changed). It is now upstream's bytes again: the sweep's background budget is
+# the door's own (``routing.ts`` picks it by the resume's shape), so the call site names
+# no options. A file with NO fork delta cannot be union-listed (union only matters where
+# the fork adds lines), so it is asserted by
+# ``tests/hermes_cli/test_fork_merge_policy.py::MIGRATED_TO_FORK_OWNED`` instead.

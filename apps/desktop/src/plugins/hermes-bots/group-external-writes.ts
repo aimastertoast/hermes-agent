@@ -32,7 +32,6 @@ import type { GroupChatRoom } from './group-chat'
 import { groupMemberKey, groupSessionKey, groupSessionMemberKey, groupSessionThread } from './group-membership'
 import { GROUP_PROMPT_HEADER_PREFIX } from './group-round-prompt'
 import { requestForBot } from './routing'
-import { GROUP_SESSION_BACKGROUND_RESUME_OPTIONS } from './routing'
 import type { GroupMember } from './types'
 
 /** A transcript row as `session.resume` reports it; `content` is a plain string
@@ -226,15 +225,7 @@ export async function sweepExternalGroupWrites(group: string, members: GroupMemb
       let state: { messages?: GroupTranscriptRow[]; running?: boolean } | null = null
 
       try {
-        state = await requestForBot(
-          member,
-          'session.resume',
-          { session_id: stored, profile: member.name },
-          // Nobody is waiting on this mirror sweep, so it takes the background
-          // budget — but the generic 30 s default still outruns routing the
-          // session's MCP servers on a multi-server profile.
-          GROUP_SESSION_BACKGROUND_RESUME_OPTIONS
-        )
+        state = await requestForBot(member, 'session.resume', { session_id: stored, profile: member.name })
       } catch {
         continue // unreachable or gone: nothing to mirror from here
       }

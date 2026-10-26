@@ -208,11 +208,14 @@ export interface BotRequestOptions {
 }
 
 /** Hydrating a group's per-member session is bounded like Desktop's focused
- *  session hydration instead of the generic 30 s RPC default: the round that
- *  asked for it is explicit user work, the member may be cold, and routing the
- *  session's MCP servers gates the reply — so the default reports a false
- *  timeout on a multi-server profile while the resume completes anyway.
- *  'foreground' also lets a cold backend spawn take the pool's reserved slot. */
+ *  session hydration instead of the generic 30 s RPC default: the member may
+ *  be cold, and routing the session's MCP servers gates the reply — so the
+ *  default reports a false timeout on a multi-server profile while the resume
+ *  completes anyway.
+ *
+ *  'foreground' also lets a cold backend spawn take the pool's reserved slot,
+ *  so it belongs to a resume that BINDs a runtime for an action the user is
+ *  waiting on — not to one that only reads a transcript. */
 export const GROUP_SESSION_RESUME_OPTIONS = {
   spawnPriority: 'foreground',
   timeoutMs: 180_000
@@ -222,6 +225,24 @@ export const GROUP_SESSION_RESUME_OPTIONS = {
  *  harvest, the sweep that mirrors writes made outside the room. No
  *  'foreground': it must not spend the reserved slot on a cold backend. */
 export const GROUP_SESSION_BACKGROUND_RESUME_OPTIONS = { timeoutMs: 180_000 } as const
+
+/** The budget a `session.resume` gets when its caller named none.
+ *
+ * Two intents share the RPC, and they want different things from the dial:
+ * - a resume that asks for NO transcript (`omit_messages`) is binding a runtime
+ *   for an action the user is waiting on — the room's "Compress history" — so
+ *   it may take the pool's reserved foreground slot to cold-start the member's
+ *   backend;
+ * - a resume that DOES pull the transcript is hydration nobody waits on — the
+ *   room's sweep of the writes made outside the room — and must not spend that
+ *   slot on a cold backend.
+ *
+ * The split lives HERE, at the one door, instead of at the call sites: a
+ * call-site option is a fork delta on a file upstream rewrites, and a conflict
+ * there aborts `hermes update`. */
+function resumeBudget(params: Record<string, unknown>): BotRequestOptions {
+  return params.omit_messages === true ? GROUP_SESSION_RESUME_OPTIONS : GROUP_SESSION_BACKGROUND_RESUME_OPTIONS
+}
 
 /** Writes to a bot's own profile only ever come from a user action (a save,
  *  a section move, an avatar change, a duplicate). The pool reserves a slot
@@ -242,7 +263,7 @@ export async function requestForBot<T = unknown>(
   // The budget lives HERE, at the one door every bot request goes through,
   // instead of at the call sites -- a call-site timeout is a fork delta on a
   // file upstream rewrites, and a conflict there aborts `hermes update`.
-  options = options ?? (method === 'session.resume' ? GROUP_SESSION_RESUME_OPTIONS : undefined)
+  options = options ?? (method === 'session.resume' ? resumeBudget(params) : undefined)
 
   if (route) {
     if (typeof host.requestProfile !== 'function') {

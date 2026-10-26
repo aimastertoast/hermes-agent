@@ -145,6 +145,11 @@ MIGRATED_TO_FORK_OWNED = (
     "apps/desktop/src/plugins/hermes-bots/group-compress.test.tsx",
     "apps/desktop/src/plugins/hermes-bots/group-turns.ts",
     "apps/desktop/src/plugins/hermes-bots/group-test-utils.ts",
+    # the room's mirror sweep -- the last bot-mode call site that named a
+    # budget of its own. The sweep's background budget is the door's own now
+    # (routing.ts picks it by the resume's shape), so the call site is
+    # upstream's bytes again.
+    "apps/desktop/src/plugins/hermes-bots/group-external-writes.ts",
     # update routes (upstream's busiest router; the fork's routes now shadow it
     # from hermes_cli/web_routers/actions_fork.py, so upstream's file is
     # byte-identical again)

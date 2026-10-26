@@ -8,6 +8,14 @@
  * a fork delta on two upstream files that upstream rewrites, so a routine
  * merge conflicted and aborted `hermes update`. It lives here instead, at the
  * one place every bot request goes through.
+ *
+ * The room's sweep of the writes made outside the room (`group-external-writes.ts`)
+ * used to be a THIRD call site, and it is the reason the budget cannot simply
+ * be one constant: the sweep is hydration nobody waits on, so it must not take
+ * the pool's reserved foreground slot to cold-start a member's backend, while
+ * the room's "Compress history" is explicit user work and may. That split now
+ * rides on the resume's own shape, so every call site is upstream's bytes
+ * again.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -48,6 +56,23 @@ beforeEach(() => {
 describe('requestForBot resume budget', () => {
   it('gives a session.resume the room resume budget when the caller gave none', async () => {
     await requestForBot(BOT, 'session.resume', { session_id: 's' })
+
+    // A resume that pulls the transcript is hydration nobody waits on (the
+    // room's mirror sweep), so it takes the budget WITHOUT the foreground
+    // slot: the four-argument shape, no options object.
+    expect(hostMock.requestProfile).toHaveBeenCalledWith(
+      ROUTE,
+      'session.resume',
+      expect.anything(),
+      RESUME_BUDGET_MS
+    )
+  })
+
+  it('gives a transcript-free resume the foreground slot', async () => {
+    // `omit_messages` means the caller only wants the runtime bound -- the
+    // room's "Compress history", which the user is waiting on -- so its cold
+    // backend spawn may take the pool's reserved foreground slot.
+    await requestForBot(BOT, 'session.resume', { session_id: 's', omit_messages: true })
 
     expect(hostMock.requestProfile).toHaveBeenCalledWith(
       ROUTE,

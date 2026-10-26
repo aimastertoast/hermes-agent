@@ -171,10 +171,12 @@ describe('external writes into a member session', () => {
 
     // The sweep's own hydration takes the background budget: nobody is
     // waiting on a mirror, and the generic 30 s socket default outruns
-    // routing the session's MCP servers on a multi-server profile. This
-    // member is local, so its resume goes out through the host's plain
-    // request door -- and that door drops the timeout it is handed, so the
-    // budget is observed HERE instead of on the scripted gateway's log.
+    // routing the session's MCP servers on a multi-server profile. That
+    // budget is the door's own (routing.ts picks it by the resume's shape),
+    // so this call site is upstream's bytes -- the file carries no fork
+    // delta. This member is local, so its resume goes out through the host's
+    // plain request door -- and that door drops the timeout it is handed, so
+    // the budget is observed HERE instead of on the scripted gateway's log.
     const resumeBudgets: Array<number | undefined> = []
 
     const innerRequest = host.request as (
