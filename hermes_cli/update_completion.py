@@ -428,6 +428,10 @@ def _complete_selected(request: dict) -> bool:
     # on a runtime that can corrupt sessions. Unknown (the tail raised) is not proven safe.
     runtime_safe = False
     try:
+        # FORK: install the published desktop bundle for the commit this update landed on,
+        # so the build stage below finds the app already current and skips the rebuild
+        # (hermes_cli/desktop_release.py -- the fork's own release channel).
+        _install_published_desktop_release(root, desktop=bool(request.get("desktop")))
         runtime_safe = complete_source_checkout(
             root, desktop=request["desktop"], assume_yes=request["assume_yes"],
             gateway_mode=request["gateway_mode"], pre_update_snapshot_id=request["snapshot_id"],
@@ -478,6 +482,24 @@ def _complete_selected(request: dict) -> bool:
         restart, _pre_update_plan=plan, _windows_gateway_resume=request["windows_resume"],
         update_complete=bool(runtime_safe) and complete)
     return complete
+
+
+def _install_published_desktop_release(root: Path, *, desktop: bool) -> None:
+    """FORK: swap the published desktop bundle over the packaged app, when there is one.
+
+    The fork publishes a prebuilt bundle per commit as a GitHub release; this update
+    landed on such a commit, so the bundle is installed instead of rebuilt. Every
+    failure here is a fallback, never a failed update: the build stage that follows
+    builds the app from source exactly as before.
+    """
+    if not desktop:
+        return
+    try:
+        from hermes_cli.desktop_release import install_release_for_head
+
+        install_release_for_head(root)
+    except Exception as exc:  # health: allow BLE001 -- a missing bundle must never fail the update
+        print(f"  ⚠ Could not install the published desktop release: {exc}", flush=True)
 
 
 def _resume_paused_before_build(request: dict) -> None:

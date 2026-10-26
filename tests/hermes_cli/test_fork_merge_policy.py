@@ -63,7 +63,8 @@ def _fork_delta() -> dict[str, tuple[int, int]] | None:
     cannot tell a read-only diff from a gateway spawn.
     """
     ref = next(
-        (r for r in ("origin/main",) if _git("rev-parse", "--verify", "--quiet", r).returncode == 0),
+        (r for r in ("upstream/main", "origin/main")
+         if _git("rev-parse", "--verify", "--quiet", r).returncode == 0),
         None,
     )
     if ref is None:
