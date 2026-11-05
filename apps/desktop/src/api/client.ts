@@ -69,7 +69,6 @@ export function gatewayRequestTimeout(method: string, timeoutMs: number | undefi
   return timeoutMs ?? METHOD_REQUEST_TIMEOUT_MS[method]
 }
 
-export const GATEWAY_NOT_CONNECTED_MESSAGE = 'Hermes gateway is not connected'
 export { GATEWAY_NOT_CONNECTED_MESSAGE }
 
 // Canonical shared prompts (`gateway/session_pending_controls.py`) travel as
