@@ -14,8 +14,8 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import HTTPException
 
-from hermes_cli.config_backend import ConfigLockedError, ConfigValueError, ConfigWriteError
-from hermes_cli.web_deps import LateState, late
+from hermes_cli.config_backend import CONFIG_MUTATION_LOCK, ConfigLockedError, ConfigValueError, ConfigWriteError
+from hermes_cli.web_deps import late
 from hermes_cli.web_server_profiles import _profile_cli_args
 
 # Same logger the handlers used before extraction (identical logger object).
@@ -24,9 +24,6 @@ log = logging.getLogger("hermes_cli.web_server")
 _profile_scope = late("_profile_scope", "hermes_cli.web_server_profiles")
 _config_profile_scope = late("_config_profile_scope", "hermes_cli.web_server_profiles")
 _spawn_hermes_action = late("_spawn_hermes_action", "hermes_cli.web_server_gateway")
-# Config read-modify-write serialization for off-loop handlers (live lock —
-# LateState supports ``with``-blocks).
-_CONFIG_MUTATION_LOCK = LateState("_CONFIG_MUTATION_LOCK")
 
 
 @contextlib.contextmanager
@@ -46,7 +43,7 @@ def config_write_scope(profile: Optional[str]):
                 detail="profile required for config writes on a multiplexed host: pass ?profile= "
                        "(or the request body's profile) so the write lands in the named profile's config.")
     with _profile_scope(profile):
-        with _CONFIG_MUTATION_LOCK:
+        with CONFIG_MUTATION_LOCK:
             yield
 
 
